@@ -11,25 +11,28 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::trtri from internal::specialization::trtri
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel inverse of a triangular matrix.
 /// Generic implementation for any target.
 /// Panel and lookahead computed on host using Host OpenMP task.
-/// @ingroup tr_specialization
+/// @ingroup trtri_impl
 ///
 template <Target target, typename scalar_t>
-void trtri(slate::internal::TargetType<target>,
-           TriangularMatrix<scalar_t> A, int64_t lookahead)
+void trtri(
+    TriangularMatrix<scalar_t> A,
+    Options const& opts )
 {
     using BcastList = typename Matrix<scalar_t>::BcastList;
 
+    const scalar_t one = 1.0;
+
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
     // if upper, change to lower
     if (A.uplo() == Uplo::Upper) {
@@ -66,8 +69,7 @@ void trtri(slate::internal::TargetType<target>,
                 // A(1:nt-1, 0) * A(0, 0)^{-H}
                 internal::trsm<Target::HostTask>(
                     Side::Right,
-                    scalar_t(-1.0), A.sub(0, 0),
-                                    A.sub(1, A_nt-1, 0, 0));
+                    -one, A.sub(0, 0), A.sub(1, A_nt-1, 0, 0) );
             }
             ++tag;
         }
@@ -100,8 +102,7 @@ void trtri(slate::internal::TargetType<target>,
                 // leading column trsm, A(k+1:nt-1, k) * A(k, k)^{-H}
                 internal::trsm<Target::HostTask>(
                     Side::Right,
-                    scalar_t(-1.0), A.sub(k, k),
-                                    A.sub(k+1, A_nt-1, k, k));
+                    -one, A.sub(k, k), A.sub(k+1, A_nt-1, k, k) );
 
                 // send leading column to the left
                 BcastList bcast_list_A;
@@ -131,9 +132,9 @@ void trtri(slate::internal::TargetType<target>,
                     // A(k+1+la:nt-1, k+la) * A(k+la, k+la)^{-H}
                     internal::trsm<Target::HostTask>(
                         Side::Right,
-                        scalar_t(-1.0), A.sub(k+lookahead, k+lookahead),
-                                        A.sub(k+1+lookahead, A_nt-1,
-                                              k+lookahead, k+lookahead));
+                        -one, A.sub(k+lookahead, k+lookahead),
+                              A.sub(k+1+lookahead, A_nt-1,
+                                    k+lookahead, k+lookahead) );
 
                     // send leading column to the left
                     BcastList bcast_list_A;
@@ -155,9 +156,9 @@ void trtri(slate::internal::TargetType<target>,
                 {
                     // A(i, 0:k-1) += A(i, k) * A(k, 0:k-1)
                     internal::gemm<Target::HostTask>(
-                        scalar_t(1.0), A.sub(i, i, k, k),
-                                       A.sub(k, k, 0, k-1),
-                        scalar_t(1.0), A.sub(i, i, 0, k-1),
+                        one, A.sub(i, i, k, k),
+                             A.sub(k, k, 0, k-1),
+                        one, A.sub(i, i, 0, k-1),
                         layout);
 
                     if (i+1 < A_nt) {
@@ -183,9 +184,9 @@ void trtri(slate::internal::TargetType<target>,
                 if (k+1+lookahead < A_nt) {
                     // A(k+1+la:nt-1) += A(k+1+la:nt-1, k) * A(k, 0:k-1)
                     internal::gemm<target>(
-                        scalar_t(1.0), A.sub(k+1+lookahead, A_nt-1, k, k),
-                                       A.sub(k, k, 0, k-1),
-                        scalar_t(1.0), A.sub(k+1+lookahead, A_nt-1, 0, k-1),
+                        one, A.sub(k+1+lookahead, A_nt-1, k, k),
+                             A.sub(k, k, 0, k-1),
+                        one, A.sub(k+1+lookahead, A_nt-1, 0, k-1),
                         layout);
                 }
 
@@ -213,8 +214,7 @@ void trtri(slate::internal::TargetType<target>,
                 // solve A(k, k) A(k, :) = A(k, 0:k-1)
                 internal::trsm<Target::HostTask>(
                     Side::Left,
-                    scalar_t(1.0), A.sub(k, k),
-                                   A.sub(k, k, 0, k-1));
+                    one, A.sub(k, k), A.sub(k, k, 0, k-1) );
 
                 // invert A(k, k)
                 internal::trtri<Target::HostTask>(A.sub(k, k));
@@ -229,27 +229,15 @@ void trtri(slate::internal::TargetType<target>,
     A.releaseWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup tr_specialization
-///
-template <Target target, typename scalar_t>
-void trtri(TriangularMatrix<scalar_t>& A,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::trtri(internal::TargetType<target>(),
-                                    A, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel inverse of a triangular matrix.
 ///
 /// Computes the inverse of an upper or lower triangular matrix $A$.
+///
+/// Complexity (in real): $\approx \frac{1}{3} n^{3}$ flops.
+///
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
 ///     One of float, double, std::complex<float>, std::complex<double>.
@@ -279,24 +267,28 @@ void trtri(TriangularMatrix<scalar_t>& A,
 /// @ingroup tr_computational
 ///
 template <typename scalar_t>
-void trtri(TriangularMatrix<scalar_t>& A,
-           Options const& opts)
+void trtri(
+    TriangularMatrix<scalar_t>& A,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            trtri<Target::HostTask>(A, opts);
+            impl::trtri<Target::HostTask>( A, opts );
             break;
+
         case Target::HostNest:
-            trtri<Target::HostNest>(A, opts);
+            impl::trtri<Target::HostNest>( A, opts );
             break;
+
         case Target::HostBatch:
-            trtri<Target::HostBatch>(A, opts);
+            impl::trtri<Target::HostBatch>( A, opts );
             break;
+
         case Target::Devices:
-            trtri<Target::Devices>(A, opts);
+            impl::trtri<Target::Devices>( A, opts );
             break;
     }
     // todo: return value for errors?

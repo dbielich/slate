@@ -14,28 +14,25 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::bdsqr from internal::specialization::bdsqr
-namespace internal {
-namespace specialization {
-
 //------------------------------------------------------------------------------
-/// computes the singular values and, optionally, the right and/or
+/// Computes the singular values and, optionally, the right and/or
 /// left singular vectors from the singular value decomposition (SVD) of
 /// a real (upper or lower) bidiagonal matrix.
 /// Generic implementation for any target.
-/// @ingroup svd_specialization
 ///
-// ATTENTION: only singular values computed for now, no singular vectors.
-// only host computation supported for now
-//
-template <Target target, typename scalar_t>
-void bdsqr(slate::internal::TargetType<target>,
-           lapack::Job jobu, lapack::Job jobvt,
-           std::vector< blas::real_type<scalar_t> >& D,
-           std::vector< blas::real_type<scalar_t> >& E,
-           Matrix<scalar_t>& U,
-           Matrix<scalar_t>& VT)
+/// ATTENTION: only singular values computed for now, no singular vectors.
+/// Only host computation supported for now.
+///
+/// @ingroup svd_computational
+///
+template <typename scalar_t>
+void bdsqr(
+    lapack::Job jobu, lapack::Job jobvt,
+    std::vector< blas::real_type<scalar_t> >& D,
+    std::vector< blas::real_type<scalar_t> >& E,
+    Matrix<scalar_t>& U,
+    Matrix<scalar_t>& VT,
+    Options const& opts )
 {
     trace::Block trace_block("slate::bdsqr");
 
@@ -48,10 +45,6 @@ void bdsqr(slate::internal::TargetType<target>,
     int mpi_size;
 
     scalar_t zero = 0.0, one = 1.0;
-
-    // Find the total number of processors.
-    slate_mpi_call(
-        MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
 
     int myrow, mycol;
     int izero = 0;
@@ -81,23 +74,29 @@ void bdsqr(slate::internal::TargetType<target>,
         m = U.m();
         mb = U.tileMb(0);
         nb = U.tileNb(0);
+        // Find the total number of processors.
+        slate_mpi_call(
+            MPI_Comm_size(U.mpiComm(), &mpi_size));
         myrow = U.mpiRank();
         nru  = numberLocalRowOrCol(m, mb, myrow, izero, mpi_size);
         ldu = max( 1, nru );
         u1d.resize(ldu*min_mn);
         U1d = slate::Matrix<scalar_t>::fromScaLAPACK(
-              m, min_mn, &u1d[0], ldu, nb, mpi_size, 1, MPI_COMM_WORLD);
+              m, min_mn, &u1d[0], ldu, nb, mpi_size, 1, U.mpiComm());
         set(zero, one, U1d);
     }
     if (wantvt) {
         n = VT.n();
         nb = VT.tileNb(0);
+        // Find the total number of processors.
+        slate_mpi_call(
+            MPI_Comm_size(VT.mpiComm(), &mpi_size));
         mycol = VT.mpiRank();
         ncvt = numberLocalRowOrCol(n, nb, mycol, izero, mpi_size);
         ldvt = max( 1, min_mn );
         vt1d.resize(ldvt*ncvt);
         VT1d = slate::Matrix<scalar_t>::fromScaLAPACK(
-               min_mn, n, &vt1d[0], ldvt, nb, 1, mpi_size, MPI_COMM_WORLD);
+               min_mn, n, &vt1d[0], ldvt, nb, 1, mpi_size, VT.mpiComm());
         set(zero, one, VT1d);
     }
 
@@ -112,55 +111,6 @@ void bdsqr(slate::internal::TargetType<target>,
     if (wantvt) {
         VT.redistribute(VT1d);
     }
-}
-
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup svd_specialization
-///
-template <Target target, typename scalar_t>
-void bdsqr(lapack::Job jobu, lapack::Job jobvt,
-           std::vector< blas::real_type<scalar_t> >& D,
-           std::vector< blas::real_type<scalar_t> >& E,
-           Matrix<scalar_t>& U,
-           Matrix<scalar_t>& VT,
-           Options const& opts)
-{
-    internal::specialization::bdsqr<target, scalar_t>(internal::TargetType<target>(),
-                                    jobu, jobvt, D, E, U, VT);
-}
-
-//------------------------------------------------------------------------------
-///
-template <typename scalar_t>
-void bdsqr(lapack::Job jobu, lapack::Job jobvt,
-           std::vector< blas::real_type<scalar_t> >& D,
-           std::vector< blas::real_type<scalar_t> >& E,
-           Matrix<scalar_t>& U,
-           Matrix<scalar_t>& VT,
-           Options const& opts)
-{
-    Target target = get_option( opts, Option::Target, Target::HostTask );
-
-    switch (target) {
-        case Target::Host:
-        case Target::HostTask:
-            bdsqr<Target::HostTask, scalar_t>(jobu, jobvt, D, E, U, VT, opts);
-            break;
-        case Target::HostNest:
-            bdsqr<Target::HostNest, scalar_t>(jobu, jobvt, D, E, U, VT, opts);
-            break;
-        case Target::HostBatch:
-            bdsqr<Target::HostBatch, scalar_t>(jobu, jobvt, D, E, U, VT, opts);
-            break;
-        case Target::Devices:
-            bdsqr<Target::Devices, scalar_t>(jobu, jobvt, D, E, U, VT, opts);
-            break;
-    }
-    // todo: return value for errors?
 }
 
 //------------------------------------------------------------------------------

@@ -8,10 +8,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::hemm from internal::specialization::hemm
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// @internal
@@ -23,25 +20,29 @@ namespace specialization {
 /// - bcasts can get ahead of hemms by the value of lookahead.
 /// Note A, B, and C are passed by value, so we can transpose if needed
 /// (for side = right) without affecting caller.
-/// @ingroup hemm_specialization
+/// @ingroup hemm_impl
 ///
 /// ColMajor layout is assumed
 ///
-
 template <Target target, typename scalar_t>
-void hemmA(slate::internal::TargetType<target>,
-           Side side,
-           scalar_t alpha, HermitianMatrix<scalar_t> A,
-                           Matrix<scalar_t> B,
-           scalar_t beta,  Matrix<scalar_t> C,
-           int64_t lookahead)
+void hemmA(
+    Side side,
+    scalar_t alpha, HermitianMatrix<scalar_t> A,
+                    Matrix<scalar_t> B,
+    scalar_t beta,  Matrix<scalar_t> C,
+    Options const& opts )
 {
     using blas::conj;
     //using BcastListTag = typename Matrix<scalar_t>::BcastListTag;
     using BcastList = typename Matrix<scalar_t>::BcastList;
 
+    const scalar_t one = 1.0;
+
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
     // if on right, change to left by transposing A, B, C to get
     // op(C) = op(A)*op(B)
@@ -260,22 +261,22 @@ void hemmA(slate::internal::TargetType<target>,
                     auto Arow_k = A.sub(k, k, 0, k-1);
 
                     internal::gemmA<target>(
-                        alpha,         conjTranspose(Arow_k),
-                                       B.sub(k, k, 0, B.nt()-1),
-                        scalar_t(1.0), C.sub(0, k-1, 0, C.nt()-1),
+                        alpha, conj_transpose( Arow_k ),
+                               B.sub(k, k, 0, B.nt()-1),
+                        one,   C.sub(0, k-1, 0, C.nt()-1),
                         layout);
 
                     internal::hemmA<Target::HostTask>(
                         Side::Left,
-                        alpha,         A.sub(k, k),
-                                       B.sub(k, k, 0, B.nt()-1),
-                        scalar_t(1.0), C.sub(k, k, 0, C.nt()-1));
+                        alpha, A.sub(k, k),
+                               B.sub(k, k, 0, B.nt()-1),
+                        one,   C.sub(k, k, 0, C.nt()-1));
 
                     if (A.mt()-1 > k) {
                         internal::gemmA<target>(
-                            alpha,         A.sub(k+1, A.mt()-1, k, k),
-                                           B.sub(k, k, 0, B.nt()-1),
-                            scalar_t(1.0), C.sub(k+1, C.mt()-1, 0, C.nt()-1),
+                            alpha, A.sub(k+1, A.mt()-1, k, k),
+                                   B.sub(k, k, 0, B.nt()-1),
+                            one,   C.sub(k+1, C.mt()-1, 0, C.nt()-1),
                             layout);
                     }
                 }
@@ -492,23 +493,23 @@ void hemmA(slate::internal::TargetType<target>,
                                  depend(out:gemm[k])
                 {
                     internal::gemmA<target>(
-                        alpha,         A.sub(0, k-1, k, k),
-                                       B.sub(k, k, 0, B.nt()-1),
-                        scalar_t(1.0), C.sub(0, k-1, 0, C.nt()-1),
+                        alpha, A.sub(0, k-1, k, k),
+                               B.sub(k, k, 0, B.nt()-1),
+                        one,   C.sub(0, k-1, 0, C.nt()-1),
                         layout);
 
                     internal::hemmA<Target::HostTask>(
                         Side::Left,
-                        alpha,         A.sub(k, k),
-                                       B.sub(k, k, 0, B.nt()-1),
-                        scalar_t(1.0), C.sub(k, k, 0, C.nt()-1));
+                        alpha, A.sub(k, k),
+                               B.sub(k, k, 0, B.nt()-1),
+                        one,   C.sub(k, k, 0, C.nt()-1));
 
                     if (A.nt()-1 > k) {
                         auto Arow_k = A.sub(k, k, k+1, A.nt()-1);
                         internal::gemmA<target>(
-                            alpha,         conjTranspose(Arow_k),
-                                           B.sub(k, k, 0, B.nt()-1),
-                            scalar_t(1.0), C.sub(k+1, C.mt()-1, 0, C.nt()-1),
+                            alpha, conj_transpose( Arow_k ),
+                                   B.sub(k, k, 0, B.nt()-1),
+                            one,   C.sub(k+1, C.mt()-1, 0, C.nt()-1),
                             layout);
                     }
                 }
@@ -551,29 +552,7 @@ void hemmA(slate::internal::TargetType<target>,
     C.releaseWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup hemm_specialization
-///
-template <Target target, typename scalar_t>
-void hemmA(Side side,
-           scalar_t alpha, HermitianMatrix<scalar_t>& A,
-                           Matrix<scalar_t>& B,
-           scalar_t beta,  Matrix<scalar_t>& C,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::hemmA(internal::TargetType<target>(),
-                                    side,
-                                    alpha, A,
-                                           B,
-                                    beta,  C,
-                                    lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel Hermitian matrix-matrix multiplication.
@@ -630,19 +609,21 @@ void hemmA(Side side,
 /// @ingroup hemm
 ///
 template <typename scalar_t>
-void hemmA(Side side,
-           scalar_t alpha, HermitianMatrix<scalar_t>& A,
-                           Matrix<scalar_t>& B,
-           scalar_t beta,  Matrix<scalar_t>& C,
-           Options const& opts)
+void hemmA(
+    Side side,
+    scalar_t alpha, HermitianMatrix<scalar_t>& A,
+                    Matrix<scalar_t>& B,
+    scalar_t beta,  Matrix<scalar_t>& C,
+    Options const& opts )
 {
     Target target = get_option<Target>( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            hemmA<Target::HostTask>(side, alpha, A, B, beta, C, opts);
+            impl::hemmA<Target::HostTask>( side, alpha, A, B, beta, C, opts );
             break;
+
         case Target::HostNest:
         case Target::HostBatch:
         case Target::Devices:

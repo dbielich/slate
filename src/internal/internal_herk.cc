@@ -10,12 +10,6 @@
 #include "internal/internal.hh"
 #include "internal/internal_batch.hh"
 
-#ifdef SLATE_WITH_MKL
-    #include <mkl_cblas.h>
-#else
-    #include <cblas.h>
-#endif
-
 namespace slate {
 namespace internal {
 
@@ -58,6 +52,12 @@ void herk(internal::TargetType<Target::HostTask>,
     scalar_t alpha_ = scalar_t(alpha);
     scalar_t beta_  = scalar_t(beta);
 
+    TileReleaseStrategy tile_release_strategy = get_option(
+            opts, Option::TileReleaseStrategy, TileReleaseStrategy::All );
+
+    bool call_tile_tick = tile_release_strategy == TileReleaseStrategy::Internal
+                          || tile_release_strategy == TileReleaseStrategy::All;
+
     // CPU assumes column major
     // todo: relax this assumption, by updating Tile_blas.hh::herk()
     //       to operate in row major
@@ -74,17 +74,21 @@ void herk(internal::TargetType<Target::HostTask>,
                 if (i == j) {
                     #pragma omp task slate_omp_default_none \
                         shared( A, C, err ) priority( priority ) \
-                        firstprivate(j, layout, alpha, beta)
+                        firstprivate(j, layout, alpha, beta, call_tile_tick)
                     {
                         try {
                             A.tileGetForReading(j, 0, LayoutConvert(layout));
                             C.tileGetForWriting(j, j, LayoutConvert(layout));
-                            herk(alpha, A(j, 0),
-                                 beta,  C(j, j));
-                            // todo: should tileRelease()?
-                            A.tileTick(j, 0);
-                            // todo: why the second tick?
-                            A.tileTick(j, 0);
+                            tile::herk(
+                                alpha, A(j, 0),
+                                beta,  C(j, j) );
+
+                            if (call_tile_tick) {
+                                // todo: should tileRelease()?
+                                A.tileTick(j, 0);
+                                // todo: why the second tick?
+                                A.tileTick(j, 0);
+                            }
                         }
                         catch (std::exception& e) {
                             err = __LINE__;
@@ -94,19 +98,22 @@ void herk(internal::TargetType<Target::HostTask>,
                 else {
                     #pragma omp task slate_omp_default_none \
                         shared( A, C, err ) priority( priority ) \
-                        firstprivate(i, j, layout, alpha_, beta_)
+                        firstprivate(i, j, layout, alpha_, beta_, call_tile_tick)
                     {
                         try {
                             A.tileGetForReading(i, 0, LayoutConvert(layout));
                             A.tileGetForReading(j, 0, LayoutConvert(layout));
                             C.tileGetForWriting(i, j, LayoutConvert(layout));
                             auto Aj0 = A(j, 0);
-                            gemm(alpha_, A(i, 0),
-                                         conjTranspose(Aj0),
-                                 beta_,  C(i, j));
-                            // todo: should tileRelease()?
-                            A.tileTick(i, 0);
-                            A.tileTick(j, 0);
+                            tile::gemm(
+                                alpha_, A(i, 0), conj_transpose( Aj0 ),
+                                beta_,  C(i, j) );
+
+                            if (call_tile_tick) {
+                                // todo: should tileRelease()?
+                                A.tileTick(i, 0);
+                                A.tileTick(j, 0);
+                            }
                         }
                         catch (std::exception& e) {
                             err = __LINE__;
@@ -155,8 +162,9 @@ void herk(internal::TargetType<Target::HostNest>,
                 try {
                     A.tileGetForReading(j, 0, LayoutConvert(layout));
                     C.tileGetForWriting(j, j, LayoutConvert(layout));
-                    herk(alpha, A(j, 0),
-                         beta,  C(j, j));
+                    tile::herk(
+                        alpha, A(j, 0),
+                        beta,  C(j, j) );
                     // todo: should tileRelease()?
                     A.tileTick(j, 0);
                     A.tileTick(j, 0);
@@ -183,9 +191,9 @@ void herk(internal::TargetType<Target::HostNest>,
                         A.tileGetForReading(j, 0, LayoutConvert(layout));
                         C.tileGetForWriting(i, j, LayoutConvert(layout));
                         auto Aj0 = A(j, 0);
-                        gemm(alpha_, A(i, 0),
-                                     conjTranspose(Aj0),
-                             beta_,  C(i, j));
+                        tile::gemm(
+                            alpha_, A(i, 0), conj_transpose( Aj0 ),
+                            beta_,  C(i, j) );
                         // todo: should tileRelease()?
                         A.tileTick(i, 0);
                         A.tileTick(j, 0);
@@ -214,6 +222,7 @@ void herk(internal::TargetType<Target::HostBatch>,
           blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t>& C,
           int priority, int queue_index, Layout layout, Options const& opts)
 {
+#ifdef BLAS_HAVE_MKL
     // CPU assumes column major
     // todo: relax this assumption, by allowing Tile_blas.hh::herk()
     //       to take layout param
@@ -233,8 +242,9 @@ void herk(internal::TargetType<Target::HostBatch>,
                 try {
                     A.tileGetForReading(j, 0, LayoutConvert(layout));
                     C.tileGetForWriting(j, j, LayoutConvert(layout));
-                    herk(alpha, A(j, 0),
-                         beta,  C(j, j));
+                    tile::herk(
+                        alpha, A(j, 0),
+                        beta,  C(j, j) );
                     // todo: should tileRelease()?
                     A.tileTick(j, 0);
                     A.tileTick(j, 0);
@@ -333,22 +343,17 @@ void herk(internal::TargetType<Target::HostBatch>,
 
         {
             trace::Block trace_block("cblas_gemm_batch");
-            #ifdef SLATE_WITH_MKL
-                // mkl_set_num_threads_local(...);
-                cblas_gemm_batch(CblasColMajor,
-                                 opA_array.data(), opB_array.data(),
-                                 m_array.data(), n_array.data(), k_array.data(),
-                                 alpha_array.data(),
-                                 a_array.data(), lda_array.data(),
-                                 b_array.data(), ldb_array.data(),
-                                 beta_array.data(),
-                                 c_array.data(), ldc_array.data(),
-                                 batch_count, group_size.data());
-                // mkl_set_num_threads_local(1);
-            #else
-                slate_not_implemented(
-                    "slate::Target::HostBatch needs Intel MKL.");
-            #endif
+            // mkl_set_num_threads_local(...);
+            cblas_gemm_batch(CblasColMajor,
+                             opA_array.data(), opB_array.data(),
+                             m_array.data(), n_array.data(), k_array.data(),
+                             alpha_array.data(),
+                             a_array.data(), lda_array.data(),
+                             b_array.data(), ldb_array.data(),
+                             beta_array.data(),
+                             c_array.data(), ldc_array.data(),
+                             batch_count, group_size.data());
+            // mkl_set_num_threads_local(1);
         }
 
         for (int64_t j = 0; j < C.nt(); ++j) {
@@ -364,6 +369,10 @@ void herk(internal::TargetType<Target::HostBatch>,
 
     if (err)
         throw std::exception();
+#else
+    slate_not_implemented(
+        "slate::Target::HostBatch needs Intel MKL.");
+#endif
 }
 
 //------------------------------------------------------------------------------

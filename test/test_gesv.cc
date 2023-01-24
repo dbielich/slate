@@ -18,7 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
-#define SLATE_HAVE_SCALAPACK
+
 //------------------------------------------------------------------------------
 template <typename scalar_t>
 void test_gesv_work(Params& params, bool run)
@@ -28,13 +28,28 @@ void test_gesv_work(Params& params, bool run)
     // Constants
     const scalar_t one = 1.0;
 
+    // If routine is gesv, getrf, getrs (without suffix), the first time
+    // this is called, with run = false, method = PartialPiv because the
+    // command line hasn't been parsed yet.
+
+    // Decode routine, setting method and chopping off _tntpiv or _nopiv suffix.
+    if (ends_with( params.routine, "_tntpiv" )) {
+        params.routine = params.routine.substr( 0, params.routine.size() - 7 );
+        params.method_lu() = slate::MethodLU::CALU;
+    }
+    else if (ends_with( params.routine, "_nopiv" )) {
+        params.routine = params.routine.substr( 0, params.routine.size() - 6 );
+        params.method_lu() = slate::MethodLU::NoPiv;
+    }
+    auto method = params.method_lu();
+
     // get & mark input values
     slate::Op trans = slate::Op::NoTrans;
-    if (params.routine == "getrs" || params.routine == "getrs_nopiv")
+    if (params.routine == "getrs")
         trans = params.trans();
 
     int64_t m;
-    if (params.routine == "getrf" || params.routine == "getrf_nopiv")
+    if (params.routine == "getrf")
         m = params.dim.m();
     else
         m = params.dim.n();  // square, n-by-n
@@ -60,14 +75,8 @@ void test_gesv_work(Params& params, bool run)
     params.matrix.mark();
     params.matrixB.mark();
 
-    double pivot_threshold;
-    if (params.routine == "gesv_nopiv" || params.routine == "getrf_nopiv"
-        || params.routine == "getrs_nopiv") {
-        pivot_threshold = 0.0;
-    }
-    else {
-        pivot_threshold = params.pivot_threshold();
-    }
+    // NoPiv and CALU ignore threshold.
+    double pivot_threshold = params.pivot_threshold();
 
     // mark non-standard output values
     params.time();
@@ -80,9 +89,8 @@ void test_gesv_work(Params& params, bool run)
     params.gflops2();
     params.gflops2.name( "trs gflop/s" );
 
-    bool do_getrs = (
-        (check && (params.routine == "getrf" || params.routine == "getrf_nopiv"))
-        || (params.routine == "getrs" || params.routine == "getrs_nopiv"));
+    bool do_getrs = params.routine == "getrs"
+                    || (check && params.routine == "getrf");
 
     if (params.routine == "gesvMixed") {
         params.iters();
@@ -124,7 +132,8 @@ void test_gesv_work(Params& params, bool run)
         {slate::Option::Target, target},
         {slate::Option::MaxPanelThreads, panel_threads},
         {slate::Option::InnerBlocking, ib},
-        {slate::Option::PivotThreshold, pivot_threshold}
+        {slate::Option::PivotThreshold, pivot_threshold},
+        {slate::Option::MethodLU, method},
     };
 
     // Matrix A: figure out local size.
@@ -224,6 +233,8 @@ void test_gesv_work(Params& params, bool run)
                                            tileDevice, MPI_COMM_WORLD);
             Bref = slate::Matrix<scalar_t>(n, nrhs, tileNb, tileNb, tileRank,
                                            tileDevice, MPI_COMM_WORLD);
+            Aref.insertLocalTiles( slate::Target::Host );
+            Bref.insertLocalTiles( slate::Target::Host );
         }
         else {
             Aref_data.resize( lldA* nlocA );
@@ -235,8 +246,6 @@ void test_gesv_work(Params& params, bool run)
                        n, nrhs, &Bref_data[0], lldB, nb, nb,
                        grid_order, p, q, MPI_COMM_WORLD );
         }
-        Aref.insertLocalTiles(origin2target(origin));
-        Bref.insertLocalTiles(origin2target(origin));
 
         slate::copy(A, Aref);
         slate::copy(B, Bref);
@@ -244,7 +253,6 @@ void test_gesv_work(Params& params, bool run)
 
     double gflop;
     if (params.routine == "gesv"
-        || params.routine == "gesv_nopiv"
         || params.routine == "gesvMixed")
         gflop = lapack::Gflop<scalar_t>::gesv(n, nrhs);
     else
@@ -272,17 +280,6 @@ void test_gesv_work(Params& params, bool run)
             // Using traditional BLAS/LAPACK name
             // slate::gesv(A, pivots, B, opts);
         }
-        else if (params.routine == "getrf_nopiv" || params.routine == "getrs_nopiv") {
-            // Factor matrix A.
-            slate::lu_factor_nopiv(A, opts);
-            // Using traditional BLAS/LAPACK name
-            // slate::getrf_nopiv(A, opts);
-        }
-        else if (params.routine == "gesv_nopiv") {
-            slate::lu_solve_nopiv(A, B, opts);
-            // Using traditional BLAS/LAPACK name
-            // slate::gesv_nopiv(A, B, opts);
-        }
         else if (params.routine == "gesvMixed") {
             if constexpr (std::is_same<real_t, double>::value) {
                 int iters = 0;
@@ -308,19 +305,12 @@ void test_gesv_work(Params& params, bool run)
             else if (trans == slate::Op::ConjTrans)
                 opA = conjTranspose(A);
 
-            if ((check && params.routine == "getrf")
-                || params.routine == "getrs")
+            if (params.routine == "getrs"
+                || params.routine == "getrf")
             {
                 slate::lu_solve_using_factor(opA, pivots, B, opts);
                 // Using traditional BLAS/LAPACK name
                 // slate::getrs(opA, pivots, B, opts);
-            }
-            else if ((check && params.routine == "getrf_nopiv")
-                     || params.routine == "getrs_nopiv")
-            {
-                slate::lu_solve_using_factor_nopiv(opA, B, opts);
-                // Using traditional BLAS/LAPACK name
-                // slate::getrs_nopiv(opA, B, opts);
             }
             else {
                 slate_error("Unknown routine!");
@@ -409,11 +399,6 @@ void test_gesv_work(Params& params, bool run)
             slate_assert( myrow == myrow_ );
             slate_assert( mycol == mycol_ );
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
             int64_t info_ref = 0;
 
             // ScaLAPACK descriptor for the reference matrix
@@ -428,7 +413,7 @@ void test_gesv_work(Params& params, bool run)
             // ScaLAPACK data for pivots.
             std::vector<int> ipiv_ref(lldA + nb);
 
-            if (params.routine == "getrs" || params.routine == "getrs_nopiv") {
+            if (params.routine == "getrs") {
                 // Factor matrix A.
                 scalapack_pgetrf(m, n,
                                  &Aref_data[0], 1, 1, Aref_desc, &ipiv_ref[0], &info_ref);
@@ -439,11 +424,11 @@ void test_gesv_work(Params& params, bool run)
             // Run ScaLAPACK reference routine.
             //==================================================
             double time = barrier_get_wtime(MPI_COMM_WORLD);
-            if (params.routine == "getrf" || params.routine == "getrf_nopiv") {
+            if (params.routine == "getrf") {
                 scalapack_pgetrf(m, n,
                                  &Aref_data[0], 1, 1, Aref_desc, &ipiv_ref[0], &info_ref);
             }
-            else if (params.routine == "getrs" || params.routine == "getrs_nopiv") {
+            else if (params.routine == "getrs") {
                 scalapack_pgetrs(op2str(trans), n, nrhs,
                                  &Aref_data[0], 1, 1, Aref_desc, &ipiv_ref[0],
                                  &Bref_data[0], 1, 1, Bref_desc, &info_ref);
@@ -459,11 +444,9 @@ void test_gesv_work(Params& params, bool run)
             params.ref_time() = time;
             params.ref_gflops() = gflop / time;
 
-            slate_set_num_blas_threads(saved_num_threads);
-
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
-        #else
+        #else  // not SLATE_HAVE_SCALAPACK
             if (mpi_rank == 0)
                 printf( "ScaLAPACK not available\n" );
         #endif

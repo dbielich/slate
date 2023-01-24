@@ -12,10 +12,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::gbtrf from internal::specialization::gbtrf
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel band LU factorization.
@@ -25,15 +22,24 @@ namespace specialization {
 /// Warning: ColMajor layout is assumed
 ///
 template <Target target, typename scalar_t>
-void gbtrf(slate::internal::TargetType<target>,
-           BandMatrix<scalar_t>& A, Pivots& pivots,
-           int64_t ib, int max_panel_threads, int64_t lookahead)
+void gbtrf(
+    BandMatrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
     // using real_t = blas::real_type<scalar_t>;
     using BcastList = typename BandMatrix<scalar_t>::BcastList;
 
+    const scalar_t one = 1.0;
+
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
+    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
+    int64_t max_panel_threads  = std::max(omp_get_max_threads()/2, 1);
+    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads,
+                                             max_panel_threads );
 
     int64_t A_nt = A.nt();
     int64_t A_mt = A.mt();
@@ -96,7 +102,7 @@ void gbtrf(slate::internal::TargetType<target>,
             #pragma omp task depend(inout:column[k]) priority(priority_one)
             {
                 // factor A(k:mt-1, k)
-                internal::getrf<Target::HostTask>(
+                internal::getrf_panel<Target::HostTask>(
                     A.sub(k, i_end-1, k, k), diag_len, ib,
                     pivots.at(k), max_panel_threads, priority_one);
 
@@ -136,17 +142,16 @@ void gbtrf(slate::internal::TargetType<target>,
                     // solve A(k, k) A(k, j) = A(k, j)
                     internal::trsm<Target::HostTask>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, j, j), priority_one);
+                        one, std::move( Tkk ), A.sub(k, k, j, j), priority_one );
 
                     // send A(k, j) across column A(k+1:mt-1, j)
                     A.tileBcast(k, j, A.sub(k+1, i_end-1, j, j), layout, tag_j);
 
                     // A(k+1:mt-1, j) -= A(k+1:mt-1, k) * A(k, j)
                     internal::gemm<Target::HostTask>(
-                        scalar_t(-1.0), A.sub(k+1, i_end-1, k, k),
-                                        A.sub(k, k, j, j),
-                        scalar_t(1.0),  A.sub(k+1, i_end-1, j, j),
+                        -one, A.sub(k+1, i_end-1, k, k),
+                              A.sub(k, k, j, j),
+                        one,  A.sub(k+1, i_end-1, j, j),
                         layout, priority_one);
                 }
             }
@@ -171,8 +176,8 @@ void gbtrf(slate::internal::TargetType<target>,
                     // solve A(k, k) A(k, kl+1:nt-1) = A(k, kl+1:nt-1)
                     internal::trsm<Target::HostTask>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, k+1+lookahead, j_end-1));
+                        one, std::move( Tkk ),
+                             A.sub(k, k, k+1+lookahead, j_end-1));
 
                     // send A(k, kl+1:j_end-1) across A(k+1:mt-1, kl+1:nt-1)
                     BcastList bcast_list_A;
@@ -184,9 +189,9 @@ void gbtrf(slate::internal::TargetType<target>,
 
                     // A(k+1:mt-1, kl+1:nt-1) -= A(k+1:mt-1, k) * A(k, kl+1:nt-1)
                     internal::gemm<Target::HostTask>(
-                        scalar_t(-1.0), A.sub(k+1, i_end-1, k, k),
-                                        A.sub(k, k, k+1+lookahead, j_end-1),
-                        scalar_t(1.0),  A.sub(k+1, i_end-1, k+1+lookahead, j_end-1),
+                        -one, A.sub(k+1, i_end-1, k, k),
+                              A.sub(k, k, k+1+lookahead, j_end-1),
+                        one,  A.sub(k+1, i_end-1, k+1+lookahead, j_end-1),
                         layout);
                 }
             }
@@ -203,28 +208,7 @@ void gbtrf(slate::internal::TargetType<target>,
 
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup gbsv_specialization
-///
-template <Target target, typename scalar_t>
-void gbtrf(BandMatrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
-
-    int64_t max_panel_threads  = std::max(omp_get_max_threads()/2, 1);
-    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads, max_panel_threads );
-
-    internal::specialization::gbtrf(internal::TargetType<target>(),
-                                    A, pivots,
-                                    ib, max_panel_threads, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel band LU factorization.
@@ -283,24 +267,28 @@ void gbtrf(BandMatrix<scalar_t>& A, Pivots& pivots,
 /// @ingroup gbsv_computational
 ///
 template <typename scalar_t>
-void gbtrf(BandMatrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
+void gbtrf(
+    BandMatrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            gbtrf<Target::HostTask>(A, pivots, opts);
+            impl::gbtrf<Target::HostTask>( A, pivots, opts );
             break;
+
         case Target::HostNest:
-            gbtrf<Target::HostNest>(A, pivots, opts);
+            impl::gbtrf<Target::HostNest>( A, pivots, opts );
             break;
+
         case Target::HostBatch:
-            gbtrf<Target::HostBatch>(A, pivots, opts);
+            impl::gbtrf<Target::HostBatch>( A, pivots, opts );
             break;
+
         case Target::Devices:
-            gbtrf<Target::Devices>(A, pivots, opts);
+            impl::gbtrf<Target::Devices>( A, pivots, opts );
             break;
     }
     // todo: return value for errors?

@@ -31,11 +31,11 @@ void synorm(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     synorm(in_norm, uplo, n, (cuFloatComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     synorm(in_norm, uplo, n, (hipFloatComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 #endif
@@ -50,11 +50,11 @@ void synorm(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     synorm(in_norm, uplo, n, (cuDoubleComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     synorm(in_norm, uplo, n, (hipDoubleComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 #endif
@@ -69,11 +69,11 @@ void synormOffdiag(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     synormOffdiag(in_norm, m, n, (cuFloatComplex**) Aarray, lda,
                   values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     synormOffdiag(in_norm, m, n, (hipFloatComplex**) Aarray, lda,
                   values, ldv, batch_count, queue);
 #endif
@@ -88,17 +88,17 @@ void synormOffdiag(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     synormOffdiag(in_norm, m, n, (cuDoubleComplex**) Aarray, lda,
                   values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     synormOffdiag(in_norm, m, n, (hipDoubleComplex**) Aarray, lda,
                   values, ldv, batch_count, queue);
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void synorm(
@@ -143,7 +143,7 @@ void synormOffdiag(
     blas::Queue &queue)
 {
 }
-#endif // not SLATE_NO_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -370,16 +370,22 @@ void norm(
     else if (in_norm == Norm::Fro) {
         values[0] = 0;  // scale
         values[1] = 1;  // sumsq
+        #pragma omp taskgroup
         for (int64_t j = 0; j < A.nt(); ++j) {
             // diagonal tile
             if (j < A.mt() && A.tileIsLocal(j, j)) {
-                A.tileGetForReading(j, j, LayoutConvert(layout));
-                real_t tile_values[2];
-                synorm(in_norm, A(j, j), tile_values);
-                #pragma omp critical
+                #pragma omp task slate_omp_default_none \
+                    shared( A, values ) \
+                    firstprivate(j, layout, in_norm) priority(priority)
                 {
-                    combine_sumsq(values[0], values[1],
-                              tile_values[0], tile_values[1]);
+                    A.tileGetForReading(j, j, LayoutConvert(layout));
+                    real_t tile_values[2];
+                    synorm(in_norm, A(j, j), tile_values);
+                    #pragma omp critical
+                    {
+                        combine_sumsq(values[0], values[1],
+                                tile_values[0], tile_values[1]);
+                    }
                 }
             }
             // off-diagonal tiles
@@ -493,18 +499,18 @@ void norm(internal::TargetType<Target::Devices>,
     }
 
     for (int device = 0; device < A.num_devices(); ++device) {
-        blas::set_device(device);
         int64_t num_tiles = A.getMaxDeviceTiles(device);
 
         a_host_arrays[device].resize(num_tiles);
         vals_host_arrays[device].resize(num_tiles*ldv);
 
-        a_dev_arrays[device] = blas::device_malloc<scalar_t*>(num_tiles);
-        vals_dev_arrays[device] = blas::device_malloc<real_t>(num_tiles*ldv);
+        blas::Queue* queue = A.comm_queue(device);
+        a_dev_arrays[device] = blas::device_malloc<scalar_t*>(num_tiles, *queue);
+        vals_dev_arrays[device] = blas::device_malloc<real_t>(num_tiles*ldv, *queue);
     }
 
-    // Define index ranges for quadrants of matrix.
-    // Tiles in each quadrant are all the same size.
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[6][2] = {
         // off-diagonal
         { 0,        A.mt()-1 },
@@ -678,9 +684,9 @@ void norm(internal::TargetType<Target::Devices>,
     // end omp taskgroup
 
     for (int device = 0; device < A.num_devices(); ++device) {
-        blas::set_device(device);
-        blas::device_free(a_dev_arrays[device]);
-        blas::device_free((void*)vals_dev_arrays[device]);
+        blas::Queue* queue = A.compute_queue(device, queue_index);
+        blas::device_free(a_dev_arrays[device], *queue);
+        blas::device_free((void*)vals_dev_arrays[device], *queue);
     }
 
     // Reduction over devices to local result.

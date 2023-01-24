@@ -170,8 +170,8 @@ void getrf(
 
     using real_t = blas::real_type<scalar_t>;
 
-    const scalar_t one  = 1.0;
     const scalar_t zero = 0.0;
+    const scalar_t one  = 1.0;
 
     bool root = mpi_rank == mpi_root;
     int64_t nb = tiles[0].nb();
@@ -420,9 +420,9 @@ void getrf(
                         blas::gemm(blas::Layout::ColMajor,
                                    Op::NoTrans, Op::NoTrans,
                                    tile.mb()-k-kb, nb-k-kb, kb,
-                                   -one, &tile.at(k+kb,k   ), tile.stride(),
-                                         &tile.at(k,   k+kb), tile.stride(),
-                                   one,  &tile.at(k+kb,k+kb), tile.stride());
+                                   -one, &tile.at( k+kb, k    ), tile.stride(),
+                                         &tile.at( k,    k+kb ), tile.stride(),
+                                   one,  &tile.at( k+kb, k+kb ), tile.stride());
                     }
                 }
                 else {

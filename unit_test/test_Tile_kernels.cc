@@ -216,7 +216,7 @@ void test_gemm()
 
         // run test
         try {
-            gemm( alpha, A, B, beta, C );
+            slate::tile::gemm( alpha, A, B, beta, C );
 
             // It should throw error if and only if
             // C is complex and
@@ -345,7 +345,7 @@ void test_syrk()
         try {
             if (C.op() == blas::Op::ConjTrans)  // TODO
                 conjugate( C );
-            syrk( alpha, A, beta, C );
+            slate::tile::syrk( alpha, A, beta, C );
             if (C.op() == blas::Op::ConjTrans)  // TODO
                 conjugate( C );
 
@@ -476,7 +476,7 @@ void test_herk()
         try {
             if (C.op() == blas::Op::Trans)  // TODO
                 conjugate( C );
-            herk( alpha, A, beta, C );
+            slate::tile::herk( alpha, A, beta, C );
             if (C.op() == blas::Op::Trans)  // TODO
                 conjugate( C );
 
@@ -617,7 +617,7 @@ void test_trsm()
 
         // run test
         try {
-            trsm( side, diag, alpha, A, B );
+            slate::tile::trsm( side, diag, alpha, A, B );
 
             // It should throw error if and only if
             // B is complex and
@@ -1013,19 +1013,17 @@ void test_device_convert_layout(int m, int n)
 
     // copy batch A to GPU
     scalar_t* Adata_dev;
-    blas::set_device(device);
     const int batch_arrays_index = 0;
     blas::Queue queue(device, batch_arrays_index);
 
-    Adata_dev = blas::device_malloc<scalar_t>(Adata.size());
+    Adata_dev = blas::device_malloc<scalar_t>(Adata.size(), queue);
     blas::device_memcpy<scalar_t>(Adata_dev, Adata.data(),
                         Adata.size(),
                         blas::MemcpyKind::HostToDevice,
                         queue);
 
     scalar_t* Adata_dev_ext;
-    blas::set_device(device);
-    Adata_dev_ext = blas::device_malloc<scalar_t>(Adata.size());
+    Adata_dev_ext = blas::device_malloc<scalar_t>(Adata.size(), queue);
 
     std::vector< slate::Tile<scalar_t> > Atiles_dev( batch_count );
     std::vector< scalar_t* > Aarray( batch_count );
@@ -1036,14 +1034,14 @@ void test_device_convert_layout(int m, int n)
         Aarray_ext[k] = &Adata_dev_ext[ k*lda*n ];
     }
     scalar_t** Aarray_dev;
-    Aarray_dev = blas::device_malloc<scalar_t*>(Aarray.size());
+    Aarray_dev = blas::device_malloc<scalar_t*>(Aarray.size(), queue);
     blas::device_memcpy<scalar_t*>(Aarray_dev, Aarray.data(),
                         Aarray.size(),
                         blas::MemcpyKind::HostToDevice,
                         queue);
 
     scalar_t** Aarray_dev_ext;
-    Aarray_dev_ext = blas::device_malloc<scalar_t*>(Aarray_ext.size());
+    Aarray_dev_ext = blas::device_malloc<scalar_t*>(Aarray_ext.size(), queue);
     blas::device_memcpy<scalar_t*>(Aarray_dev_ext, Aarray_ext.data(),
                         Aarray_ext.size(),
                         blas::MemcpyKind::HostToDevice,
@@ -1185,9 +1183,9 @@ void test_device_convert_layout(int m, int n)
         }
     }
 
-    blas::device_free(Adata_dev);
-    blas::device_free(Adata_dev_ext);
-    blas::device_free(Aarray_dev);
+    blas::device_free(Adata_dev, queue);
+    blas::device_free(Adata_dev_ext, queue);
+    blas::device_free(Aarray_dev, queue);
 }
 
 void test_device_convert_layout()
@@ -1229,7 +1227,7 @@ void test_deepTranspose_work(int m, int n)
     slate::Tile< scalar_t > AT( n, m, dataT.data(), ldat, HostNum,
                                 slate::TileKind::UserOwned );
 
-    deepTranspose( std::move(A), std::move(AT) );
+    slate::tile::deepTranspose( std::move( A ), std::move( AT ) );
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i)
             test_assert( A(i, j) == AT(j, i) );
@@ -1237,7 +1235,7 @@ void test_deepTranspose_work(int m, int n)
     // deepTranspose( std::move(A), std::move(A) );  // error
 
     if (m == n) {
-        deepTranspose( std::move(A) );
+        slate::tile::deepTranspose( std::move( A ) );
         // Check that A == A^T.
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
@@ -1284,7 +1282,7 @@ void test_deepConjTranspose_work(int m, int n)
     slate::Tile< scalar_t > AH( n, m, dataH.data(), ldah, HostNum,
                                 slate::TileKind::UserOwned );
 
-    deepConjTranspose( std::move(A), std::move(AH) );
+    slate::tile::deepConjTranspose( std::move( A ), std::move( AH ) );
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i)
             test_assert( A(i, j) == conj(AH(j, i)) );
@@ -1292,7 +1290,7 @@ void test_deepConjTranspose_work(int m, int n)
     // deepConjTranspose( std::move(A), std::move(A) );  // error
 
     if (m == n) {
-        deepConjTranspose( std::move(A) );
+        slate::tile::deepConjTranspose( std::move( A ) );
         // Check that A == A^H.
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)

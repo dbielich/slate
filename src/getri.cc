@@ -12,15 +12,12 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::getri from internal::specialization::getri
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel inverse of a general matrix.
 /// Generic implementation for any target.
-/// @ingroup gesv_specialization
+/// @ingroup gesv_impl
 ///
 /// todo: This routine is in-place and does not support GPUs.
 ///       There is another one (out-of-place) that does.
@@ -29,12 +26,17 @@ namespace specialization {
 ///       b) error out (not supported)?
 ///
 template <Target target, typename scalar_t>
-void getri(slate::internal::TargetType<target>,
-           Matrix<scalar_t>& A, Pivots& pivots,
-           int64_t lookahead)
+void getri(
+    Matrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
+    slate_assert(A.mt() == A.nt());  // square
+
     using BcastList = typename Matrix<scalar_t>::BcastList;
     using ReduceList = typename Matrix<scalar_t>::ReduceList;
+
+    const scalar_t zero = 0.0;
+    const scalar_t one  = 1.0;
 
     // Assumes column major
     const Layout layout = Layout::ColMajor;
@@ -58,7 +60,7 @@ void getri(slate::internal::TargetType<target>,
             // Zero L(k, k).
             if (L.tileIsLocal(k, k)) {
                 auto Lkk = L(k, k);
-                tzset(scalar_t(0.0), Lkk);
+                tile::tzset( zero, Lkk );
             }
 
             // send W down col A(0:nt-1, k)
@@ -68,7 +70,7 @@ void getri(slate::internal::TargetType<target>,
             auto Wkk = TriangularMatrix<scalar_t>(Uplo::Lower, Diag::Unit, W);
             internal::trsm<Target::HostTask>(
                 Side::Right,
-                scalar_t(1.0), std::move(Wkk), A.sub(0, A.nt()-1, k, k));
+                one, std::move( Wkk ), A.sub(0, A.nt()-1, k, k) );
         }
         --k;
 
@@ -84,7 +86,7 @@ void getri(slate::internal::TargetType<target>,
             // Zero L(k, k).
             if (L.tileIsLocal(k, k)) {
                 auto Lkk = L(k, k);
-                tzset(scalar_t(0.0), Lkk);
+                tile::tzset( zero, Lkk );
             }
 
             // Zero L(k+1:A_nt-1, k).
@@ -104,9 +106,9 @@ void getri(slate::internal::TargetType<target>,
 
             // A(:, k) -= A(:, k+1:nt-1) * W
             internal::gemmA<Target::HostTask>(
-                scalar_t(-1.0), A.sub(0, A.nt()-1, k+1, A.nt()-1),
-                                W.sub(1, W.mt()-1, 0, 0),
-                scalar_t(1.0),  A.sub(0, A.nt()-1, k, k), layout);
+                -one, A.sub(0, A.nt()-1, k+1, A.nt()-1),
+                      W.sub(1, W.mt()-1, 0, 0),
+                one,  A.sub(0, A.nt()-1, k, k), layout);
 
             // reduce A(0:nt-1, k)
             ReduceList reduce_list_A;
@@ -126,7 +128,7 @@ void getri(slate::internal::TargetType<target>,
             auto Tkk = TriangularMatrix<scalar_t>(Uplo::Lower, Diag::Unit, Wkk);
             internal::trsm<Target::HostTask>(
                 Side::Right,
-                scalar_t(1.0), std::move(Tkk), A.sub(0, A.nt()-1, k, k));
+                one, std::move( Tkk ), A.sub(0, A.nt()-1, k, k) );
         }
 
         // Apply column pivoting.
@@ -138,30 +140,15 @@ void getri(slate::internal::TargetType<target>,
     }
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup gesv_specialization
-///
-template <Target target, typename scalar_t>
-void getri(Matrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
-{
-    slate_assert(A.mt() == A.nt());  // square
-
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::getri(internal::TargetType<target>(),
-                                    A, pivots, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel LU inversion.
 ///
 /// Computes the inverse of a matrix $A$ using the LU factorization $A = L*U$
 /// computed by `getrf`.
+///
+/// Complexity (in real): $\approx \frac{4}{3} n^{3}$ flops.
 ///
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
@@ -178,9 +165,6 @@ void getri(Matrix<scalar_t>& A, Pivots& pivots,
 ///
 /// @param[in] opts
 ///     Additional options, as map of name = value pairs. Possible options:
-///     - Option::Lookahead:
-///       Number of panels to overlap with matrix updates.
-///       lookahead >= 0. Default 1.
 ///     - Option::Target:
 ///       Implementation to target. Possible values:
 ///       - HostTask:  OpenMP tasks on CPU host [default].
@@ -191,8 +175,9 @@ void getri(Matrix<scalar_t>& A, Pivots& pivots,
 /// @ingroup gesv_computational
 ///
 template <typename scalar_t>
-void getri(Matrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
+void getri(
+    Matrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
     // triangular inversion
     auto U = TriangularMatrix<scalar_t>(Uplo::Upper, Diag::NonUnit, A);
@@ -203,16 +188,19 @@ void getri(Matrix<scalar_t>& A, Pivots& pivots,
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            getri<Target::HostTask>(A, pivots, opts);
+            impl::getri<Target::HostTask>( A, pivots, opts );
             break;
+
         case Target::HostNest:
-            getri<Target::HostNest>(A, pivots, opts);
+            impl::getri<Target::HostNest>( A, pivots, opts );
             break;
+
         case Target::HostBatch:
-            getri<Target::HostBatch>(A, pivots, opts);
+            impl::getri<Target::HostBatch>( A, pivots, opts );
             break;
+
         case Target::Devices:
-            getri<Target::Devices>(A, pivots, opts);
+            impl::getri<Target::Devices>( A, pivots, opts );
             break;
     }
     // todo: return value for errors?

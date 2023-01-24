@@ -19,11 +19,11 @@ template <>
 void tzadd(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<float> alpha, std::complex<float>** Aarray, int64_t lda,
-    std::complex<float> beta, std::complex<float>** Barray, int64_t ldb,
+    std::complex<float> const& alpha, std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const& beta, std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzadd(uplo, m, n,
           make_cuFloatComplex(alpha.real(), alpha.imag()),
           (cuFloatComplex**) Aarray, lda,
@@ -31,7 +31,7 @@ void tzadd(
           (cuFloatComplex**) Barray, ldb,
           batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzadd(uplo, m, n,
           make_hipFloatComplex(alpha.real(), alpha.imag()),
           (hipFloatComplex**) Aarray, lda,
@@ -45,11 +45,11 @@ template <>
 void tzadd(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<double> alpha, std::complex<double>** Aarray, int64_t lda,
-    std::complex<double> beta, std::complex<double>** Barray, int64_t ldb,
+    std::complex<double> const& alpha, std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const& beta, std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzadd(uplo, m, n,
           make_cuDoubleComplex(alpha.real(), alpha.imag()),
           (cuDoubleComplex**) Aarray, lda,
@@ -57,7 +57,7 @@ void tzadd(
           (cuDoubleComplex**) Barray, ldb,
           batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzadd(uplo, m, n,
           make_hipDoubleComplex(alpha.real(), alpha.imag()),
           (hipDoubleComplex**) Aarray, lda,
@@ -67,14 +67,14 @@ void tzadd(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void tzadd(
     Uplo uplo,
     int64_t m, int64_t n,
-    double alpha, double** Aarray, int64_t lda,
-    double beta, double** Barray, int64_t ldb,
+    double const& alpha, double** Aarray, int64_t lda,
+    double const& beta, double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
@@ -83,12 +83,12 @@ template <>
 void tzadd(
     Uplo uplo,
     int64_t m, int64_t n,
-    float alpha, float** Aarray, int64_t lda,
-    float beta, float** Barray, int64_t ldb,
+    float const& alpha, float** Aarray, int64_t lda,
+    float const& beta, float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -140,8 +140,9 @@ void add(internal::TargetType<Target::HostTask>,
                     {
                         A.tileGetForReading(i, j, LayoutConvert::None);
                         B.tileGetForWriting(i, j, LayoutConvert::None);
-                        axpby(alpha, A(i, j),
-                              beta,  B(i, j));
+                        tile::add(
+                            alpha, A(i, j),
+                            beta,  B(i, j) );
                         A.tileTick(i, j);
                     }
                 }
@@ -158,8 +159,9 @@ void add(internal::TargetType<Target::HostTask>,
                     {
                         A.tileGetForReading(i, j, LayoutConvert::None);
                         B.tileGetForWriting(i, j, LayoutConvert::None);
-                        axpby(alpha, A(i, j),
-                              beta,  B(i, j));
+                        tile::add(
+                            alpha, A(i, j),
+                            beta,  B(i, j) );
                         A.tileTick(i, j);
                     }
                 }
@@ -204,6 +206,8 @@ void add(internal::TargetType<Target::Devices>,
     using ij_tuple = typename BaseMatrix<scalar_t>::ij_tuple;
     slate_error_if(A.uplo() != B.uplo());
 
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[4][2] = {
         { 0,        B.mt()-1 },
         { B.mt()-1, B.mt()   },
@@ -355,7 +359,7 @@ void add(internal::TargetType<Target::Devices>,
 
             for (int q = 0; q < 4; ++q) {
                 if (group_count[q] > 0) {
-                    device::geadd(mb[q], nb[q],
+                    device::batch::geadd(mb[q], nb[q],
                                   alpha, a_array_dev, lda[q],
                                   beta,  b_array_dev, ldb[q],
                                   group_count[q], *queue);

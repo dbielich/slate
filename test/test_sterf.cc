@@ -54,6 +54,8 @@ void test_sterf_work(Params& params, bool run)
     std::vector<real_t> Dref = D;
     std::vector<real_t> Eref = E;
 
+    real_t tol = params.tol() * 0.5 * std::numeric_limits<real_t>::epsilon();
+
     //---------
     // run test
     if (trace) slate::trace::Trace::on();
@@ -75,25 +77,17 @@ void test_sterf_work(Params& params, bool run)
         //==================================================
         // Test results
         //==================================================
+        time = barrier_get_wtime(MPI_COMM_WORLD);
+
+        //==================================================
+        // Run LAPACK reference routine.
+        //==================================================
+
+        lapack::sterf(n, &Dref[0], &Eref[0]);
+
+        params.ref_time() = barrier_get_wtime(MPI_COMM_WORLD) - time;
+
         if (mpi_rank == 0) {
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
-            real_t tol = params.tol() * 0.5 * std::numeric_limits<real_t>::epsilon();
-
-            //==================================================
-            // Run LAPACK reference routine.
-            //==================================================
-            time = barrier_get_wtime(MPI_COMM_WORLD);
-
-            lapack::sterf(n, &Dref[0], &Eref[0]);
-
-            params.ref_time() = barrier_get_wtime(MPI_COMM_WORLD) - time;
-
-            slate_set_num_blas_threads(saved_num_threads);
             if (verbose) {
                 // Print first 20 and last 20 rows.
                 printf( "%9s  %9s\n", "D", "Dref" );

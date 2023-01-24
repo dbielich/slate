@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright (c) 2017-2022, University of Tennessee. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
@@ -29,6 +29,8 @@ import argparse
 import subprocess
 import xml.etree.ElementTree as ET
 import io
+import select
+import time
 
 # ------------------------------------------------------------------------------
 # command line arguments
@@ -41,16 +43,16 @@ group_test.add_argument( '-t', '--test', action='store',
 group_test.add_argument( '--xml', help='generate report.xml for jenkins' )
 
 group_size = parser.add_argument_group( 'matrix dimensions (default is medium)' )
-group_size.add_argument(       '--quick',  action='store_true', help='run quick "sanity check" of few, small tests' )
-group_size.add_argument( '-x', '--xsmall', action='store_true', help='run x-small tests' )
-group_size.add_argument( '-s', '--small',  action='store_true', help='run small tests' )
-group_size.add_argument( '-m', '--medium', action='store_true', help='run medium tests' )
-group_size.add_argument( '-l', '--large',  action='store_true', help='run large tests' )
-group_size.add_argument(       '--square', action='store_true', help='run square (m = n = k) tests', default=False )
-group_size.add_argument(       '--tall',   action='store_true', help='run tall (m > n) tests', default=False )
-group_size.add_argument(       '--wide',   action='store_true', help='run wide (m < n) tests', default=False )
-group_size.add_argument(       '--mnk',    action='store_true', help='run tests with m, n, k all different', default=False )
-group_size.add_argument(       '--dim',    action='store',      help='explicitly specify size', default='' )
+group_size.add_argument( '--quick',  action='store_true', help='run quick "sanity check" of few, small tests' )
+group_size.add_argument( '--xsmall', action='store_true', help='run x-small tests' )
+group_size.add_argument( '--small',  action='store_true', help='run small tests' )
+group_size.add_argument( '--medium', action='store_true', help='run medium tests' )
+group_size.add_argument( '--large',  action='store_true', help='run large tests' )
+group_size.add_argument( '--square', action='store_true', help='run square (m = n = k) tests', default=False )
+group_size.add_argument( '--tall',   action='store_true', help='run tall (m > n) tests', default=False )
+group_size.add_argument( '--wide',   action='store_true', help='run wide (m < n) tests', default=False )
+group_size.add_argument( '--mnk',    action='store_true', help='run tests with m, n, k all different', default=False )
+group_size.add_argument( '--dim',    action='store',      help='explicitly specify size', default='' )
 
 group_cat = parser.add_argument_group( 'category (default is all)' )
 categories = [
@@ -72,6 +74,7 @@ categories = [
     group_cat.add_argument( '--svd',           action='store_true', help='run SVD tests' ),
     group_cat.add_argument( '--aux',           action='store_true', help='run auxiliary routine tests' ),
     group_cat.add_argument( '--norms',         action='store_true', help='run norm tests' ),
+    group_cat.add_argument( '--cond',          action='store_true', help='run condition number estimate tests' ),
 ]
 # map category objects to category names: ['lu', 'chol', ...]
 categories = list( map( lambda x: x.dest, categories ) )
@@ -86,6 +89,7 @@ group_opt.add_argument( '--trans',  action='store', help='default=%(default)s', 
 group_opt.add_argument( '--uplo',   action='store', help='default=%(default)s', default='l,u' )
 group_opt.add_argument( '--diag',   action='store', help='default=%(default)s', default='n,u' )
 group_opt.add_argument( '--side',   action='store', help='default=%(default)s', default='l,r' )
+group_opt.add_argument( '--equed',  action='store', help='default=%(default)s', default='b,r,c,n' )
 group_opt.add_argument( '--alpha',  action='store', help='', default='' )
 group_opt.add_argument( '--beta',   action='store', help='', default='' )
 group_opt.add_argument( '--incx',   action='store', help='default=%(default)s', default='1,2,-1,-2' )
@@ -120,6 +124,10 @@ group_opt.add_argument( '--np',     action='store', help='number of MPI processe
 group_opt.add_argument( '--grid',   action='store', help='use p-by-q MPI process grid', default='' )
 group_opt.add_argument( '--repeat', action='store', help='times to repeat each test', default='' )
 group_opt.add_argument( '--thresh', action='store', help='default=%(default)s', default='1,0.5')
+group_opt.add_argument( '--dry-run', action='store_true', help='print the commands that would be executed, but do not execute them.' )
+group_opt.add_argument( '-x', '--exclude', action='append', help='routines to exclude; repeatable', default=[] )
+group_opt.add_argument( '--timeout', action='store', help='timeout in seconds for each routine', type=float )
+group_opt.add_argument( '--tee', action=argparse.BooleanOptionalAction, help='controls writing to both stdout and stderr' )
 
 parser.add_argument( 'tests', nargs=argparse.REMAINDER )
 opts = parser.parse_args()
@@ -255,6 +263,7 @@ trans  = ' --trans '  + opts.trans  if (opts.trans)  else ''
 uplo   = ' --uplo '   + opts.uplo   if (opts.uplo)   else ''
 diag   = ' --diag '   + opts.diag   if (opts.diag)   else ''
 side   = ' --side '   + opts.side   if (opts.side)   else ''
+equed  = ' --equed '  + opts.equed  if (opts.equed)  else ''
 a      = ' --alpha '  + opts.alpha  if (opts.alpha)  else ''
 ab     = a+' --beta ' + opts.beta   if (opts.beta)   else a
 incx   = ' --incx '   + opts.incx   if (opts.incx)   else ''
@@ -350,15 +359,24 @@ if (opts.blas3):
 # LU
 if (opts.lu):
     cmds += [
-    [ 'gesv',  gen + dtype + la + n + thresh],
-    [ 'gesv_nopiv',  gen + dtype + la + n + ' --matrix rand_dominant' + ' --nonuniform_nb n'],
-    [ 'getrf', gen + dtype + la + n + thresh],  # todo: mn
-    [ 'getrf_nopiv', target + grid + ref + check + repeat + nb + dtype + la + n + ' --matrix rand_dominant'+ ' --nonuniform_nb n'],
-    [ 'getrs', gen + dtype + la + n + trans + thresh],
-    [ 'getrs_nopiv', gen + dtype + la + n + trans + ' --matrix rand_dominant' + ' --nonuniform_nb n'],
-    [ 'getri', gen + dtype + la + n ],
+    [ 'gesv',         gen + dtype + la + n + thresh ],
+    [ 'gesv_tntpiv',  gen + dtype + la + n ],
+    [ 'gesv_nopiv',   gen + dtype + la + n
+                      + ' --matrix rand_dominant --nonuniform_nb n' ],
+
+    # todo: mn
+    [ 'getrf',        gen + dtype + la + n + thresh ],
+    [ 'getrf_tntpiv', gen + dtype + la + n ],
+    [ 'getrf_nopiv',  gen + dtype + la + n
+                      + ' --matrix rand_dominant --nonuniform_nb n' ],
+
+    [ 'getrs',        gen + dtype + la + n + trans + thresh ],
+    [ 'getrs_tntpiv', gen + dtype + la + n + trans ],
+    [ 'getrs_nopiv',  gen + dtype + la + n + trans
+                      + ' --matrix rand_dominant --nonuniform_nb n' ],
+
+    [ 'getri',    gen + dtype + la + n ],
     [ 'getriOOP', gen + dtype + la + n ],
-    #[ 'gecon', gen + dtype + la + n ],
     #[ 'gerfs', gen + dtype + la + n + trans ],
     #[ 'geequ', gen + dtype + la + n ],
     [ 'gesvMixed',  gen + dtype_double + la + n ],
@@ -370,7 +388,6 @@ if (opts.lu_band):
     [ 'gbsv',  gen + dtype + la + n  + kl + ku ],
     [ 'gbtrf', gen + dtype + la + n  + kl + ku ],  # todo: mn
     [ 'gbtrs', gen + dtype + la + n  + kl + ku + trans ],
-    #[ 'gbcon', gen + dtype + la + n  + kl + ku ],
     #[ 'gbrfs', gen + dtype + la + n  + kl + ku + trans ],
     #[ 'gbequ', gen + dtype + la + n  + kl + ku ],
     ]
@@ -382,7 +399,6 @@ if (opts.chol):
     [ 'potrf', gen + dtype + la + n + uplo + ddist ],
     [ 'potrs', gen + dtype + la + n + uplo ],
     [ 'potri', gen + dtype + la + n + uplo ],
-    #[ 'pocon', gen + dtype + la + n + uplo ],
     #[ 'porfs', gen + dtype + la + n + uplo ],
     #[ 'poequ', gen + dtype + la + n ],  # only diagonal elements (no uplo)
     [ 'posvMixed',  gen + dtype_double + la + n + uplo ],
@@ -395,7 +411,6 @@ if (opts.chol):
     [ 'pbsv',  gen + dtype + la + n + kd + uplo ],
     [ 'pbtrf', gen + dtype + la + n + kd + uplo ],
     [ 'pbtrs', gen + dtype + la + n + kd + uplo ],
-    #[ 'pbcon', gen + dtype + la + n + kd + uplo ],
     #[ 'pbrfs', gen + dtype + la + n + kd + uplo ],
     #[ 'pbequ', gen + dtype + la + n + kd + uplo ],
     ]
@@ -427,11 +442,7 @@ if (opts.hesv):
 if (opts.least_squares):
     cmds += [
     # todo: mn (i.e., add wide)
-    [ 'gels',   gen + dtype + la + n + tall + trans_nc ],
-    #[ 'gelsy',  gen + dtype + la + mn ],
-    #[ 'gelsd',  gen + dtype + la + mn ],
-    #[ 'gelss',  gen + dtype + la + mn ],
-    #[ 'getsls', gen + dtype + la + mn + trans_nc ],
+    [ 'gels',   gen + dtype + la + n + tall + trans_nc + ' --method-gels qr,cholqr' ],
 
     # Generalized
     #[ 'gglse', gen + dtype + la + mnk ],
@@ -441,6 +452,7 @@ if (opts.least_squares):
 # QR
 if (opts.qr):
     cmds += [
+    [ 'cholqr', gen + dtype + la + n + tall ],  # not wide
     [ 'geqrf', gen + dtype + la + mn ],
     [ 'unmqr', gen + dtype + la + mn ],
     #[ 'ggqrf', gen + dtype + la + mnk ],
@@ -549,6 +561,19 @@ if (opts.norms):
     #[ 'tbnorm', gen + dtype + la + n + kd + norm ],
     ]
 
+# cond
+if (opts.cond):
+    cmds += [
+    [ 'gecondest', gen + dtype + n ],
+
+    # Triangle
+    [ 'trcondest', gen + dtype + n ],
+
+    #[ 'gbcon', gen + dtype + la + n  + kl + ku ],
+    #[ 'pocon', gen + dtype + la + n + uplo ],
+    #[ 'pbcon', gen + dtype + la + n + kd + uplo ],
+    ]
+
 # aux
 if (opts.aux):
     cmds += [
@@ -570,6 +595,8 @@ if (opts.aux):
     [ 'syscale', gen + dtype + n  + ab + uplo ],
     [ 'hescale', gen + dtype + n  + ab + uplo ],
 
+    [ 'scale_row_col', gen + dtype + mn + equed ],
+
     [ 'set',    gen + dtype + mn + ab        ],
     [ 'tzset',  gen + dtype + mn + ab + uplo ],
     [ 'trset',  gen + dtype +  n + ab + uplo ],
@@ -588,32 +615,64 @@ output_redirected = not sys.stdout.isatty()
 def print_tee( *args ):
     global output_redirected
     print( *args )
-    if (output_redirected):
+    if (output_redirected and opts.tee):
         print( *args, file=sys.stderr )
 # end
 
 # ------------------------------------------------------------------------------
 # cmd is a pair of strings: (function, args)
-
+# returns pair: (error, output-string), where error is the result from
+# subprocess wait, so error == 0 is success.
+#
 def run_test( cmd ):
     print( '-' * 80 )
-    cmd = opts.test +' '+ cmd[1] +' '+ cmd[0]
-    print_tee( cmd )
+    cmd_str = opts.test +' '+ cmd[1] +' '+ cmd[0]
+    print_tee( cmd_str )
+    if (opts.dry_run):
+        return (0, None)
+
+    failure_reason = 'FAILED'
     output = ''
-    p = subprocess.Popen( cmd.split(), stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT )
+    p = subprocess.Popen( cmd_str.split(), stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT )
     p_out = p.stdout
     if (sys.version_info.major >= 3):
         p_out = io.TextIOWrapper(p.stdout, encoding='utf-8')
-    # Read unbuffered ("for line in p.stdout" will buffer).
-    for line in iter(p_out.readline, ''):
-        print( line, end='' )
-        output += line
-    err = p.wait()
-    if (err != 0):
-        print_tee( 'FAILED: exit code', err )
+
+    if (opts.timeout is None):
+        # Read unbuffered ("for line in p.stdout" will buffer).
+        for line in iter(p_out.readline, ''):
+            print( line, end='' )
+            output += line
     else:
-        print_tee( 'pass' )
+        killed = False
+        poll_obj = select.poll()
+        poll_obj.register(p_out, select.POLLIN)
+        now = start = time.time()
+        while (now - start) < opts.timeout:
+            # 0 means do not wait in poll(), return immediately.
+            poll_result = poll_obj.poll(0)
+            if poll_result:
+                # Assumed that tester prints new lines.
+                out = p_out.readline()
+                print( out, end='' )
+                output += out
+            # Check whether the process is still alive
+            err = p.poll()
+            if err is not None:
+                break
+            now = time.time()
+        else:
+            killed = True
+            failure_reason = 'Timeout (limit=' + str(opts.timeout) + ')'
+            output = output + '\n' + failure_reason
+            p.kill()
+    err = p.wait()
+
+    if (err != 0):
+        print_tee( failure_reason + ': ' + cmd[0] + ', exit code', err )
+    else:
+        print_tee( 'passed: ' + cmd[0] )
     return (err, output)
 # end
 
@@ -626,7 +685,7 @@ run_all = (ntests == 0)
 
 seen = set()
 for cmd in cmds:
-    if (run_all or cmd[0] in opts.tests):
+    if ((run_all or cmd[0] in opts.tests) and cmd[0] not in opts.exclude):
         seen.add( cmd[0] )
         (err, output) = run_test( cmd )
         if (err):

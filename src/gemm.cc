@@ -21,6 +21,8 @@ namespace slate {
 ///     auto BT = slate::conjTranspose( B );
 ///     slate::gemm( alpha, AT, BT, beta, C );
 ///
+/// Complexity (in real): $2 m n k$ flops.
+///
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
 ///         One of float, double, std::complex<float>, std::complex<double>.
@@ -69,15 +71,18 @@ void gemm(scalar_t alpha, Matrix<scalar_t>& A,
     Method method = get_option(
         opts, Option::MethodGemm, MethodGemm::Auto );
 
+    // Select_algo can also change target.
+    Options tuned_opts = opts;
+
     if (method == MethodGemm::Auto)
-        method = MethodGemm::select_algo( A, B, opts );
+        method = MethodGemm::select_algo( A, B, tuned_opts );
 
     switch (method) {
         case MethodGemm::GemmA:
-            gemmA( alpha, A, B, beta, C, opts );
+            gemmA( alpha, A, B, beta, C, tuned_opts );
             break;
         case MethodGemm::GemmC:
-            gemmC( alpha, A, B, beta, C, opts );
+            gemmC( alpha, A, B, beta, C, tuned_opts );
             break;
     }
 }

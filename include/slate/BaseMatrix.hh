@@ -15,6 +15,7 @@
 #include "slate/types.hh"
 
 #include "lapack.hh"
+#include "lapack/device.hh"
 
 #include <algorithm>
 #include <memory>
@@ -406,6 +407,30 @@ public:
         storage_->tileTick(globalIndex(i, j));
     }
 
+    /// Returns how many times the tile {i, j} is received
+    /// through MPI.
+    /// This function is used to track tiles that may be
+    /// communicated twice due to symmetricity
+    /// during hemm and symm operations.
+    int64_t tileReceiveCount(int64_t i, int64_t j) const
+    {
+        return storage_->tileReceiveCount( globalIndex( i, j ) );
+    }
+
+    /// Increments the number of times the tile {i, j} is received
+    /// through MPI.
+    void tileIncrementReceiveCount(int64_t i, int64_t j)
+    {
+        storage_->tileIncrementReceiveCount( globalIndex( i, j ) );
+    }
+
+    /// Decrements the number of times the tile {i, j} is received
+    /// through MPI.
+    void tileDecrementReceiveCount(int64_t i, int64_t j)
+    {
+        storage_->tileDecrementReceiveCount( globalIndex( i, j ) );
+    }
+
     void tileErase( int64_t i, int64_t j, int device=HostNum );
 
     void tileRelease( int64_t i, int64_t j, int device=HostNum );
@@ -499,10 +524,12 @@ public:
 protected:
     void tileBcastToSet(int64_t i, int64_t j, std::set<int> const& bcast_set);
     void tileBcastToSet(int64_t i, int64_t j, std::set<int> const& bcast_set,
-                        int radix, int tag, Layout layout);
+                        int radix, int tag, Layout layout,
+                        Target target);
     void tileIbcastToSet(int64_t i, int64_t j, std::set<int> const& bcast_set,
                         int radix, int tag, Layout layout,
-                        std::vector<MPI_Request>& send_requests);
+                        std::vector<MPI_Request>& send_requests,
+                        Target target);
 
 public:
     // todo: should this be private?
@@ -534,9 +561,17 @@ public:
         storage_->releaseWorkspace();
     }
 
+    void eraseLocalWorkspaceTile(int64_t i, int64_t j);
+
     void eraseLocalWorkspace();
 
+    void eraseLocalWorkspace(std::set<ij_tuple>& tile_set);
+
+    void eraseRemoteWorkspaceTile(int64_t i, int64_t j);
+
     void eraseRemoteWorkspace();
+
+    void eraseRemoteWorkspace(std::set<ij_tuple>& tile_set);
 
     /// Removes all temporary host and device workspace tiles from matrix.
     /// WARNING: currently, this clears the entire parent matrix,
@@ -604,7 +639,7 @@ public:
     /// @param[in] device
     ///     Tile's device ID.
     ///
-    blas::Queue* comm_queue(int device)
+    lapack::Queue* comm_queue(int device)
     {
         return storage_->comm_queues_.at(device);
     }
@@ -618,7 +653,7 @@ public:
     /// @param[in] queue_index
     ///     The index of a specific set of queues
     ///
-    blas::Queue* compute_queue(int device, int queue_index=0)
+    lapack::Queue* compute_queue(int device, int queue_index=0)
     {
         assert((queue_index >= 0) &&
                (queue_index < int(storage_->compute_queues_.size())));
@@ -1922,7 +1957,7 @@ void BaseMatrix<scalar_t>::listBcast(
             // Send across MPI ranks.
             // Previous used MPI bcast: tileBcastToSet(i, j, bcast_set);
             // Currently uses 2D hypercube p2p send.
-            tileIbcastToSet(i, j, bcast_set, 2, tag, layout, send_requests);
+            tileIbcastToSet(i, j, bcast_set, 2, tag, layout, send_requests, target);
         }
 
         // Copy to devices.
@@ -2048,7 +2083,6 @@ void BaseMatrix<scalar_t>::listBcastMT(
         auto submatrices_list = std::get<2>(bcast);
         auto tagij = std::get<3>(bcast);
         int tag = int(tagij) % 32768;  // MPI_TAG_UB is at least 32767
-        std::vector< std::set<ij_tuple> > tile_set(num_devices());
 
         {
             trace::Block trace_block(
@@ -2071,21 +2105,24 @@ void BaseMatrix<scalar_t>::listBcastMT(
                     auto iter = storage_->find( globalIndex( i, j, HostNum ) );
 
                     int64_t life = 0;
-                    for (auto submatrix : submatrices_list)
+                    for (auto submatrix : submatrices_list) {
                         life += submatrix.numLocalTiles() * life_factor;
-
-                    if (iter == storage_->end())
+                    }
+                    if (iter == storage_->end()) {
                         tileInsertWorkspace( i, j, HostNum );
-                    else
-                        life += tileLife(i, j); // todo: use temp tile to receive
-                    tileLife(i, j, life);
+                    }
+                    else {
+                        life += tileLife( i, j ); // todo: use temp tile to receive
+                    }
+                    tileLife( i, j, life );
+                    tileIncrementReceiveCount( i, j );
                 }
 
                 // Send across MPI ranks.
                 // Previous used MPI bcast: tileBcastToSet(i, j, bcast_set);
                 // Currently uses radix-D hypercube p2p send.
                 int radix = 4; // bcast_set.size(); // 2;
-                tileBcastToSet(i, j, bcast_set, radix, tag, layout);
+                tileBcastToSet(i, j, bcast_set, radix, tag, layout, target);
             }
 
             // Copy to devices.
@@ -2146,8 +2183,8 @@ void BaseMatrix<scalar_t>::listReduce(ReduceList& reduce_list, Layout layout, in
                 if (mpi_rank_ != root_rank)
                     tileErase( i, j, HostNum );
             }
-            else {
-                tileModified(i, j);
+            else if (root_rank == mpi_rank_ && reduce_set.size() > 1) {
+                tileModified( i, j );
             }
         }
     }
@@ -2259,12 +2296,12 @@ void BaseMatrix<scalar_t>::tileBcastToSet(
 template <typename scalar_t>
 void BaseMatrix<scalar_t>::tileBcastToSet(
     int64_t i, int64_t j, std::set<int> const& bcast_set,
-    int radix, int tag, Layout layout)
+    int radix, int tag, Layout layout, Target target)
 {
     std::vector<MPI_Request> requests;
     requests.reserve(radix);
 
-    tileIbcastToSet(i, j, bcast_set, radix, tag, layout, requests);
+    tileIbcastToSet(i, j, bcast_set, radix, tag, layout, requests, target);
     slate_mpi_call(MPI_Waitall(requests.size(), requests.data(), MPI_STATUSES_IGNORE));
 }
 
@@ -2302,7 +2339,8 @@ template <typename scalar_t>
 void BaseMatrix<scalar_t>::tileIbcastToSet(
     int64_t i, int64_t j, std::set<int> const& bcast_set,
     int radix, int tag, Layout layout,
-    std::vector<MPI_Request>& send_requests)
+    std::vector<MPI_Request>& send_requests,
+    Target target)
 {
     // Quit if only root in the broadcast set.
     if (bcast_set.size() == 1)
@@ -2333,24 +2371,31 @@ void BaseMatrix<scalar_t>::tileIbcastToSet(
     internal::cubeBcastPattern(new_vec.size(), new_rank, radix,
                                recv_from, send_to);
 
+    int device = HostNum;
+    #if defined(SLATE_WITH_GPU_AWARE_MPI)
+    if (target == Target::Devices) {
+        device = tileDevice(i, j);
+    }
+    #endif
     // Receive.
     if (! recv_from.empty()) {
-        // read tile on host memory
-        tileAcquire(i, j, layout);
+        // read tile
+        tileAcquire(i, j, device, layout);
 
-        at(i, j).recv(new_vec[recv_from.front()], mpi_comm_, layout, tag);
-        tileLayout(i, j, layout);
-        tileModified(i, j);
+        at(i, j, device).recv(new_vec[recv_from.front()], mpi_comm_, layout, tag);
+        tileLayout(i, j, device, layout);
+        tileModified(i, j, device);
     }
 
     if (! send_to.empty()) {
-        // read tile on host memory
-        tileGetForReading(i, j, LayoutConvert(layout));
+        // read tile
+        tileGetForReading(i, j, device, LayoutConvert(layout));
 
+        auto Aij = at(i, j, device);
         // Forward using multiple mpi_isend() calls
         for (int dst : send_to) {
             MPI_Request request;
-            at(i, j).isend(new_vec[dst], mpi_comm_, tag, &request);
+            Aij.isend(new_vec[dst], mpi_comm_, tag, &request);
             send_requests.push_back(request);
         }
     }
@@ -2365,6 +2410,8 @@ void BaseMatrix<scalar_t>::tileReduceFromSet(
     int64_t i, int64_t j, int root_rank, std::set<int>& reduce_set,
     int radix, int tag, Layout layout)
 {
+    const scalar_t one = 1.0;
+
     // Quit if the reduction set is empty
     if (reduce_set.empty())
         return;
@@ -2410,7 +2457,7 @@ void BaseMatrix<scalar_t>::tileReduceFromSet(
         // Receive.
         tile.recv(new_vec[src], mpi_comm_, layout, tag);
         // Accumulate.
-        axpy(scalar_t(1.0), tile, Aij);
+        tile::add( one, tile, Aij );
     }
 
     // Forward.
@@ -2545,14 +2592,13 @@ void BaseMatrix<scalar_t>::tileCopyDataLayout(Tile<scalar_t>* src_tile,
 
     if (need_convert && (! is_square)) {
         assert( work_device != HostNum );
-        blas::set_device(work_device);
     }
 
     if (need_workspace) {
         work_data = storage_->allocWorkspaceBuffer(work_device);
     }
 
-    blas::Queue* queue = comm_queue( dst_tile->device() == HostNum
+    lapack::Queue* queue = comm_queue( dst_tile->device() == HostNum
                                      ? src_tile->device()
                                      : dst_tile->device() );
 
@@ -2565,7 +2611,7 @@ void BaseMatrix<scalar_t>::tileCopyDataLayout(Tile<scalar_t>* src_tile,
             dst_tile->layoutConvert(*queue, async);
         }
         else if (copy_first) {
-            blas::Queue* queue2 = comm_queue(work_device);
+            lapack::Queue* queue2 = comm_queue(work_device);
 
             int64_t work_stride = src_tile->stride();
 
@@ -2593,7 +2639,7 @@ void BaseMatrix<scalar_t>::tileCopyDataLayout(Tile<scalar_t>* src_tile,
                 queue2->sync();
         }
         else {
-            blas::Queue* queue2 = comm_queue(work_device);
+            lapack::Queue* queue2 = comm_queue(work_device);
 
             int64_t work_stride = src_tile->layout() == Layout::ColMajor ?
                                   src_tile->nb() :
@@ -3490,7 +3536,7 @@ void BaseMatrix<scalar_t>::tileLayoutConvert(
             tile->layoutConvert(work_data);
         }
         else {
-            blas::Queue* queue = comm_queue(tile->device());
+            lapack::Queue* queue = comm_queue(tile->device());
             tile->layoutConvert(work_data, *queue, async && (! need_workspace));
         }
 
@@ -3622,8 +3668,7 @@ void BaseMatrix<scalar_t>::tileLayoutConvert(
                 std::max(batch_count, int64_t(bucket->second.first.size()));
         }
 
-        blas::Queue* queue = comm_queue(device);
-        blas::set_device(device);
+        lapack::Queue* queue = comm_queue(device);
 
         // for each bucket
         for (auto bucket  = tilesBuckets.begin();
@@ -4010,23 +4055,90 @@ std::tuple<int64_t, int64_t, int>
 }
 
 //------------------------------------------------------------------------------
-/// Erases local workspace tiles.
+/// Erases a given local workspace tile.
+///
+template <typename scalar_t>
+void BaseMatrix<scalar_t>::eraseLocalWorkspaceTile(int64_t i, int64_t j)
+{
+    if (this->tileIsLocal( i, j )) {
+        auto& tile_node = this->storage_->at( this->globalIndex( i, j ) );
+
+        LockGuard guard( tile_node.getLock() );
+
+        for (int device = HostNum; device < this->num_devices(); ++device) {
+            if (tile_node.existsOn( device )
+                    && tile_node[ device ].tile()->workspace()) {
+
+                this->tileErase( i, j, device );
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+/// Erases all local workspace tiles.
 ///
 template <typename scalar_t>
 void BaseMatrix<scalar_t>::eraseLocalWorkspace()
 {
     for (int64_t j = 0; j < this->nt(); ++j) {
         for (int64_t i = 0; i < this->mt(); ++i) {
-            if (this->tileIsLocal(i, j)) {
-                auto& tile_node = this->storage_->at(this->globalIndex(i, j));
+            eraseLocalWorkspaceTile( i, j );
+        }
+    }
+}
 
-                LockGuard guard(tile_node.getLock());
+//------------------------------------------------------------------------------
+/// Erases a given set of local workspace tiles
+/// from all devices including host.
+///
+/// @param[in] tile_set
+///     Set of (i, j) tuples indicating indices of tiles to be erased.
+///
+template <typename scalar_t>
+void BaseMatrix<scalar_t>::eraseLocalWorkspace(
+    std::set<ij_tuple>& tile_set)
+{
+    for (auto ij : tile_set) {
+        int64_t i = std::get<0>( ij );
+        int64_t j = std::get<1>( ij );
+        eraseLocalWorkspaceTile( i, j );
+    }
+}
 
-                for (int d = 0; d < this->num_devices(); ++d) {
-                    if (tile_node.existsOn(d)
-                        && tile_node[d].tile()->workspace()) {
+//------------------------------------------------------------------------------
+/// Erases a given tile that is not local to node from all devices
+/// including host.
+/// The tile's receive count is decremented. If the receive count
+/// reaches zero, the tile is erased. Otherwise, tile is not erased.
+///
+template <typename scalar_t>
+void BaseMatrix<scalar_t>::eraseRemoteWorkspaceTile(int64_t i, int64_t j)
+{
+    if (! tileIsLocal( i, j ) ) { // erase remote tiles
+        // This lock ensures that no other thread is trying to
+        // remove this tile from the map of tiles.
+        LockGuard guard( storage_->getTilesMapLock() );
 
-                        this->tileErase(i, j, d);
+        auto iter = this->storage_->find( this->globalIndex( i, j ) );
+        if (iter != this->storage_->end()) {
+
+            // auto& tile_node = *(iter->second);
+
+            // This lock ensures that no other thread is trying to
+            // modify the tile.
+            // The following lock causes the following runtime
+            // error on Crusher
+            //
+            // FATAL ERROR (libmp/x86_64/omp_lock.c:297): omp_destroy_lock
+            // failed: Can only destroy unlocked lockss.
+            //
+            // LockGuard guard_tile( tile_node.getLock() );
+            if (tileExists( i, j )) {
+                if (tileReceiveCount( i, j ) > 0) {
+                    tileDecrementReceiveCount( i, j );
+                    if (tileReceiveCount( i, j ) == 0) {
+                        tileErase( i, j, AllDevices );
                     }
                 }
             }
@@ -4041,12 +4153,28 @@ void BaseMatrix<scalar_t>::eraseLocalWorkspace()
 template <typename scalar_t>
 void BaseMatrix<scalar_t>::eraseRemoteWorkspace()
 {
-    for (int64_t j = 0; j < this->nt(); ++j) {
-        for (int64_t i = 0; i < this->mt(); ++i) {
-            if (! this->tileIsLocal(i, j)) { // erase remote tiles
-                this->tileErase(i, j, AllDevices);
-            }
+    for (int64_t j = 0; j < nt(); ++j) {
+        for (int64_t i = 0; i < mt(); ++i) {
+            eraseRemoteWorkspaceTile( i, j );
         }
+    }
+}
+
+//------------------------------------------------------------------------------
+/// Erases a given set of tiles that are not local to node
+/// from all devices including host.
+///
+/// @param[in] tile_set
+///     Set of (i, j) tuples indicating indices of tiles to be erased.
+///
+template <typename scalar_t>
+void BaseMatrix<scalar_t>::eraseRemoteWorkspace(
+    std::set<ij_tuple>& tile_set)
+{
+    for (auto ij : tile_set) {
+        int64_t i = std::get<0>( ij );
+        int64_t j = std::get<1>( ij );
+        eraseRemoteWorkspaceTile( i, j );
     }
 }
 

@@ -10,10 +10,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::ge2tb from internal::specialization::ge2tb
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel reduction to band for 3-stage SVD.
@@ -22,21 +19,26 @@ namespace specialization {
 ///
 /// ColMajor layout is assumed
 ///
-/// @ingroup svd_specialization
+/// @ingroup svd_impl
 ///
 template <Target target, typename scalar_t>
-void ge2tb(slate::internal::TargetType<target>,
-           Matrix<scalar_t>& A,
-           TriangularFactors<scalar_t>& TU,
-           TriangularFactors<scalar_t>& TV,
-           int64_t ib, int max_panel_threads)
+void ge2tb(
+    Matrix<scalar_t>& A,
+    TriangularFactors<scalar_t>& TU,
+    TriangularFactors<scalar_t>& TV,
+    Options const& opts )
 {
     using BcastList = typename Matrix<scalar_t>::BcastList;
-
     using blas::real;
 
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
+    int64_t max_panel_threads  = std::max(omp_get_max_threads()/2, 1);
+    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads,
+                                             max_panel_threads );
 
     int64_t A_mt = A.mt();
     int64_t A_nt = A.nt();
@@ -240,7 +242,7 @@ void ge2tb(slate::internal::TargetType<target>,
                     if (V_panel.tileIsLocal(0, j)) {
                         V_panel.tileGetForReading( 0, j, HostNum, LayoutConvert(layout) );
                         VT_panel.tileGetForWriting( j, 0, HostNum, LayoutConvert(layout) );
-                        deepConjTranspose(V_panel(0, j), VT_panel(j, 0));
+                        tile::deepConjTranspose( V_panel(0, j), VT_panel(j, 0) );
                     }
                 }
 
@@ -257,7 +259,7 @@ void ge2tb(slate::internal::TargetType<target>,
                         TVl_panel.tileInsert(0, i);
                         TVlT_panel.tileGetForReading( i, 0, HostNum, LayoutConvert(layout) );
                         TVl_panel.tileGetForWriting( 0, i, HostNum, LayoutConvert(layout) );
-                        gecopy(TVlT_panel(i, 0), TVl_panel(0, i));
+                        tile::gecopy( TVlT_panel(i, 0), TVl_panel(0, i) );
                         break;
                     }
                 }
@@ -267,7 +269,7 @@ void ge2tb(slate::internal::TargetType<target>,
                     if (V_panel.tileIsLocal(0, j)) {
                         VT_panel.tileGetForReading( j, 0, HostNum, LayoutConvert(layout) );
                         V_panel.tileGetForWriting( 0, j, HostNum, LayoutConvert(layout) );
-                        deepConjTranspose(VT_panel(j, 0), V_panel(0, j));
+                        tile::deepConjTranspose( VT_panel(j, 0), V_panel(0, j) );
                     }
                 }
                 // todo: VT_panel.clear();
@@ -361,28 +363,7 @@ void ge2tb(slate::internal::TargetType<target>,
     A.releaseWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup svd_specialization
-///
-template <Target target, typename scalar_t>
-void ge2tb(Matrix<scalar_t>& A,
-           TriangularFactors<scalar_t>& TU,
-           TriangularFactors<scalar_t>& TV,
-           Options const& opts)
-{
-    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
-
-    int64_t max_panel_threads  = std::max(omp_get_max_threads()/2, 1);
-    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads, max_panel_threads );
-
-    internal::specialization::ge2tb(internal::TargetType<target>(),
-                                    A, TU, TV,
-                                    ib, max_panel_threads);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel reduction to band for 3-stage SVD.
@@ -440,26 +421,30 @@ void ge2tb(Matrix<scalar_t>& A,
 /// @ingroup svd_computational
 ///
 template <typename scalar_t>
-void ge2tb(Matrix<scalar_t>& A,
-           TriangularFactors<scalar_t>& TU,
-           TriangularFactors<scalar_t>& TV,
-           Options const& opts)
+void ge2tb(
+    Matrix<scalar_t>& A,
+    TriangularFactors<scalar_t>& TU,
+    TriangularFactors<scalar_t>& TV,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            ge2tb<Target::HostTask>(A, TU, TV, opts);
+            impl::ge2tb<Target::HostTask>( A, TU, TV, opts );
             break;
+
         case Target::HostNest:
-            ge2tb<Target::HostNest>(A, TU, TV, opts);
+            impl::ge2tb<Target::HostNest>( A, TU, TV, opts );
             break;
+
         case Target::HostBatch:
-            ge2tb<Target::HostBatch>(A, TU, TV, opts);
+            impl::ge2tb<Target::HostBatch>( A, TU, TV, opts );
             break;
+
         case Target::Devices:
-            ge2tb<Target::Devices>(A, TU, TV, opts);
+            impl::ge2tb<Target::Devices>( A, TU, TV, opts );
             break;
     }
     // todo: return value for errors?

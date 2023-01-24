@@ -83,8 +83,11 @@ public:
     testsweeper::ParamEnum< slate::Origin >         origin;
     testsweeper::ParamEnum< slate::Target >         target;
 
+    testsweeper::ParamEnum< slate::Method >         method_cholQR;
+    testsweeper::ParamEnum< slate::Method >         method_gels;
     testsweeper::ParamEnum< slate::Method >         method_gemm;
     testsweeper::ParamEnum< slate::Method >         method_hemm;
+    testsweeper::ParamEnum< slate::Method >         method_lu;
     testsweeper::ParamEnum< slate::Method >         method_trsm;
 
     testsweeper::ParamEnum< slate::GridOrder >      grid_order;
@@ -106,6 +109,7 @@ public:
     testsweeper::ParamEnum< slate::Op >             transB;
     testsweeper::ParamEnum< slate::Diag >           diag;
     testsweeper::ParamEnum< slate::Direction >      direction;
+    testsweeper::ParamEnum< slate::Equed >          equed;
     testsweeper::ParamEnum< lapack::StoreV >        storev;
     testsweeper::ParamEnum< lapack::MatrixType >    matrixtype;
 
@@ -136,6 +140,9 @@ public:
     testsweeper::ParamDouble pivot_threshold;
 
     // ----- output parameters
+    testsweeper::ParamScientific value;
+    testsweeper::ParamScientific value2;
+    testsweeper::ParamScientific value3;
     testsweeper::ParamScientific error;
     testsweeper::ParamScientific error2;
     testsweeper::ParamScientific error3;
@@ -187,6 +194,7 @@ void test_herk   (Params& params, bool run);
 
 // LU, general
 void test_gesv       (Params& params, bool run);
+void test_gecondest  (Params& params, bool run);
 void test_getri      (Params& params, bool run);
 void test_trtri      (Params& params, bool run);
 
@@ -211,10 +219,11 @@ void test_hetrf  (Params& params, bool run);
 void test_hetrs  (Params& params, bool run);
 
 // QR, LQ, RQ, QL
-void test_gels   (Params& params, bool run);
-void test_geqrf  (Params& params, bool run);
-void test_gelqf  (Params& params, bool run);
-void test_unmqr  (Params& params, bool run);
+void test_gels      (Params& params, bool run);
+void test_geqrf     (Params& params, bool run);
+void test_gelqf     (Params& params, bool run);
+void test_unmqr     (Params& params, bool run);
+void test_trcondest (Params& params, bool run);
 
 // symmetric/Hermitian eigenvalues
 void test_heev   (Params& params, bool run);
@@ -249,6 +258,7 @@ void test_trnorm (Params& params, bool run);
 void test_add    (Params& params, bool run);
 void test_copy   (Params& params, bool run);
 void test_scale  (Params& params, bool run);
+void test_scale_row_col(Params& params, bool run);
 void test_set    (Params& params, bool run);
 
 // -----------------------------------------------------------------------------
@@ -433,6 +443,17 @@ inline double barrier_get_wtime(MPI_Comm comm)
     slate::trace::Block trace_block("MPI_Barrier");
     MPI_Barrier(comm);
     return testsweeper::get_wtime();
+}
+
+//------------------------------------------------------------------------------
+/// @return true if str ends with ending.
+/// std::string ends_with added in C++20. For now, do simple implementation.
+///
+inline bool ends_with( std::string const& str, std::string const& ending )
+{
+    return str.size() >= ending.size()
+           && str.compare( str.size() - ending.size(), std::string::npos,
+                           ending ) == 0;
 }
 
 #endif // SLATE_TEST_HH

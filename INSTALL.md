@@ -156,8 +156,10 @@ SLATE specific options include:
         openmpi         Open MPI BLACS in SLATE's testers.
         intelmpi        Intel MPI BLACS in SLATE's testers (default).
 
-    SCALAPACK_LIBRARIES [CMake only]
-        Specify the exact ScaLAPACK libraries, overriding the built-in search.
+    SCALAPACK_LIBRARIES [Makefile and CMake]
+        For SLATE's testers, specify the exact ScaLAPACK libraries to
+        use, overriding the built-in search, or set to `none` to build
+        testers without ScaLAPACK.
         With MKL, by default it uses
             -lmkl_scalapack_lp64 -lmkl_blacs_openmpi_lp64
         or  -lmkl_scalapack_lp64 -lmkl_blacs_intelmpi_lp64;
@@ -208,27 +210,22 @@ options include:
         mpi = 1             link with `-lmpi`
         mpi = spectrum      link with `-lmpi_ibm`
         mpi = cray          using Cray compiler wrappers (CXX=CC, FC=ftn)
-        mpi = 0             without MPI (experimental)
-
-        NOTE: SLATE compiles without MPI, but not all routines operate
-        correctly. Also, the testers currently require ScaLAPACK, which
-        requires MPI, so testers will fail.
 
     cuda_arch
-        With the CUDA backend, by default SLATE will compile for
-        CUDA architecture Pascal. To use a different architecture, set
-        `cuda_arch` to one or more of:
-        `kepler maxwell pascal volta turing sm_XY`
-        where XY is a valid CUDA architecture (see `nvcc -h | grep sm_`).
+        By default, SLATE uses nvcc's default architecture.
+        To use a different architecture, set `cuda_arch` to one or more of:
+        `kepler maxwell pascal volta turing ampere hopper sm_XY`
+        where XY is a valid CUDA architecture (see `nvcc -h | grep sm_`),
+        separated by space.
 
     hip_arch
-        With the HIP backend, by default SLATE will compile for
-        HIP architectures gfx900 gfx906 gfx908. To use a different architecture,
-        set `hip_arch` to one or more of:
-        `gfx900`  for AMD Radeon Instinct MI25 / Vega 10
-        `gfx906`  for AMD Radeon Instinct MI50 / Vega 20
-        `gfx908`  for AMD Instinct MI100
-        or other valid HIP architecture.
+        By default, SLATE uses hipcc's default architecture.
+        To use a different architecture, set `hip_arch` to one or more of:
+        `gfx900` or `mi25`  for AMD Radeon Instinct MI25 / Vega 10
+        `gfx906` or `mi50`  for AMD Radeon Instinct MI50 / Vega 20
+        `gfx908` or `mi100` for AMD Instinct MI100
+        `gfx90a` or `mi200` for AMD Instinct MI200 series (MI250)
+        or other valid HIP architecture, separated by space.
         See https://llvm.org/docs/AMDGPUUsage.html
 
     openmp
@@ -311,16 +308,6 @@ options include:
         For example, `-DCMAKE_CUDA_ARCHITECTURES=70` should be added for
         the Volta architecture.
 
-    use_mpi
-        Whether to use MPI, if available. One of:
-        yes (default)
-        no  (experimental)
-
-        NOTE: SLATE compiles without MPI, but not all routines operate
-        correctly. Also, the testers currently require ScaLAPACK, which
-        requires MPI, so testers will fail. The C API definitely requires
-        MPI.
-
     use_openmp
         Whether to use OpenMP, if available. One of:
         yes (default)
@@ -328,7 +315,7 @@ options include:
 
     build_tests
         Whether to build test suite (test/tester).
-        Requires ScaLAPACK. One of:
+        Requires ScaLAPACK unless SCALAPACK_LIBRARIES=none. One of:
         yes (default)
         no
 

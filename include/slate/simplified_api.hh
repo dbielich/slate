@@ -262,6 +262,7 @@ void lu_solve(
 // }
 
 // gesv_nopiv
+// todo: deprecate, use lu_solve( ..., { MethodLU: NoPiv } )
 template <typename scalar_t>
 void lu_solve_nopiv(
     Matrix<scalar_t>& A,
@@ -306,6 +307,7 @@ void lu_factor(
 // }
 
 // getrf_nopiv
+// todo: deprecate, use lu_factor_nopiv( ..., { MethodLU: NoPiv } )
 template <typename scalar_t>
 void lu_factor_nopiv(
     Matrix<scalar_t>& A,
@@ -352,6 +354,7 @@ void lu_solve_using_factor(
 // }
 
 // getrs_nopiv
+// todo: deprecate, use lu_solve_using_factor( ..., { MethodLU: NoPiv } )
 template <typename scalar_t>
 void lu_solve_using_factor_nopiv(
     Matrix<scalar_t>& A,
@@ -617,8 +620,7 @@ void least_squares_solve(
     Matrix<scalar_t>& BX,
     Options const& opts = Options())
 {
-    TriangularFactors<scalar_t> T;
-    gels(A, T, BX, opts);
+    gels( A, BX, opts );
 }
 
 //-----------------------------------------

@@ -18,17 +18,17 @@ namespace device {
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const* const* Aarray, int64_t lda,
     std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gecopy(m, n,
            (cuFloatComplex**) Aarray, lda,
            (cuFloatComplex**) Barray, ldb,
            batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gecopy(m, n,
            (hipFloatComplex**) Aarray, lda,
            (hipFloatComplex**) Barray, ldb,
@@ -39,17 +39,17 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const* const* Aarray, int64_t lda,
     std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gecopy(m, n,
            (cuFloatComplex**) Aarray, lda,
            (cuDoubleComplex**) Barray, ldb,
            batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gecopy(m, n,
            (hipFloatComplex**) Aarray, lda,
            (hipDoubleComplex**) Barray, ldb,
@@ -60,17 +60,17 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const* const* Aarray, int64_t lda,
     std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gecopy(m, n,
            (cuDoubleComplex**) Aarray, lda,
            (cuDoubleComplex**) Barray, ldb,
            batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gecopy(m, n,
            (hipDoubleComplex**) Aarray, lda,
            (hipDoubleComplex**) Barray, ldb,
@@ -81,17 +81,17 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const* const* Aarray, int64_t lda,
     std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gecopy(m, n,
            (cuDoubleComplex**) Aarray, lda,
            (cuFloatComplex**) Barray, ldb,
            batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gecopy(m, n,
            (hipDoubleComplex**) Aarray, lda,
            (hipFloatComplex**) Barray, ldb,
@@ -100,12 +100,12 @@ void gecopy(
 }
 
 //---------------------------------------------------
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    double** Aarray, int64_t lda,
+    double const* const* Aarray, int64_t lda,
     double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -114,7 +114,7 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    double** Aarray, int64_t lda,
+    double const* const* Aarray, int64_t lda,
     float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -123,7 +123,7 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    float** Aarray, int64_t lda,
+    float const* const* Aarray, int64_t lda,
     float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -131,12 +131,12 @@ void gecopy(
 template <>
 void gecopy(
     int64_t m, int64_t n,
-    float** Aarray, int64_t lda,
+    float const* const* Aarray, int64_t lda,
     double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
-#endif // not SLATE_NO_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -188,7 +188,7 @@ void copy(internal::TargetType<Target::HostTask>,
                     A.tileGetForReading(i, j, LayoutConvert::None);
                     // tileAcquire() to avoid un-needed copy
                     B.tileAcquire(i, j, A.tileLayout(i, j));
-                    gecopy(A(i, j), B(i, j));
+                    tile::gecopy( A(i, j), B(i, j) );
                     B.tileModified(i, j, HostNum, true);
                     A.tileTick(i, j);
                 }
@@ -231,6 +231,9 @@ void copy(internal::TargetType<Target::Devices>,
           int priority, int queue_index)
 {
     using ij_tuple = typename BaseMatrix<src_scalar_t>::ij_tuple;
+
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[4][2] = {
         { 0,        B.mt()-1 },
         { B.mt()-1, B.mt()   },
@@ -298,7 +301,6 @@ void copy(internal::TargetType<Target::Devices>,
             dst_scalar_t** b_array_dev = B.array_device(device, queue_index);
 
             blas::Queue* queue = B.compute_queue(device, queue_index);
-            blas::set_device( queue->device() );
 
             blas::device_memcpy<src_scalar_t*>(a_array_dev, a_array_host,
                                 batch_count,

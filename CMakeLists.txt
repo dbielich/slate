@@ -17,7 +17,7 @@ cmake_minimum_required( VERSION 3.18 )
 
 project(
     slate
-    VERSION 2022.06.00
+    VERSION 2022.07.00
     LANGUAGES CXX Fortran
 )
 
@@ -101,18 +101,19 @@ set_property( CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
               None Debug Release RelWithDebInfo MinSizeRel )
 
 # CUDA architectures required in CMake 3.18
-# Fermi   20
-# Kepler  30 35 37
-# Maxwell 50 52 53
-# Pascal  60 61 62
-# Volta   70 72
-# Turing  75
-# Ampere  80 86
+# Fermi   20        # CUDA 3.2 to 8
+# Kepler  30 35 37  # CUDA 5 to 10; sm_35 and sm_37 deprecated in CUDA 11
+# Maxwell 50 52 53  # CUDA 6 to 11
+# Pascal  60 61 62  # CUDA >= 8
+# Volta   70 72     # CUDA >= 9
+# Turing  75        # CUDA >= 10
+# Ampere  80 86 87  # CUDA >= 11.1
+# Hopper  90        # CUDA >= 12
 # Also -real and -virtual suffixes.
 set( CMAKE_CUDA_ARCHITECTURES "60" CACHE STRING
-     "CUDA architectures, as semi-colon separated list of 2-digit numbers, e.g., 60;70;80 for Pascal, Volta, Ampere" )
+     "CUDA architectures, as semi-colon separated list of numbers, e.g., 60;70;80 for Pascal, Volta, Ampere" )
 set_property( CACHE CMAKE_CUDA_ARCHITECTURES PROPERTY STRINGS
-              30 50 60 70 75 80 )
+              30 35 50 60 70 75 80 90 )
 
 #-----------------------------------
 # BLAS options
@@ -201,6 +202,7 @@ file(
     src/*.f
     src/auxiliary/*.cc
     src/core/*.cc
+    src/device/*.cc
     src/internal/*.cc
     src/work/*.cc
     ${c_api_src}
@@ -404,10 +406,6 @@ message( STATUS "LAPACK++ done" )
 
 target_link_libraries( slate PUBLIC blaspp lapackpp )
 
-if ("${blaspp_defines}" MATCHES "HAVE_MKL")
-    target_compile_definitions( slate PUBLIC "-DSLATE_WITH_MKL" )
-endif()
-
 #-------------------------------------------------------------------------------
 # CUDA support.
 message( "" )
@@ -451,7 +449,6 @@ if (CMAKE_CUDA_COMPILER)
     message( STATUS "Building CUDA support in SLATE" )
 else()
     message( STATUS "Not building CUDA support in SLATE" )
-    target_compile_definitions( slate PUBLIC "-DSLATE_NO_CUDA" )
 endif()
 
 #-------------------------------------------------------------------------------
@@ -480,9 +477,6 @@ if (HIP_FOUND)
     # For ROCm >= 3.5, wipe hip-clang specific interface options which are propagated
     set_target_properties( hip::device PROPERTIES INTERFACE_COMPILE_OPTIONS "-fPIC" )
     set_target_properties( hip::device PROPERTIES INTERFACE_LINK_LIBRARIES "hip::host" )
-
-    # Propagate flags to HIP code.
-    set_target_properties( hip::device PROPERTIES INTERFACE_COMPILE_OPTIONS "-DSLATE_NO_CUDA")
 
     # First, get the HIP source's base files (which are CUDA sources, needing
     # to be hipified)
@@ -608,7 +602,6 @@ if (HIP_FOUND)
     endforeach()
 else()
     message( STATUS "Not building HIP/ROCm support in SLATE" )
-    target_compile_definitions( slate PUBLIC "-DSLATE_NO_HIP" )
 endif()
 
 #-------------------------------------------------------------------------------

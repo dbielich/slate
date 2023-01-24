@@ -23,12 +23,18 @@ using testsweeper::ansi_bold;
 using testsweeper::ansi_red;
 using testsweeper::ansi_normal;
 
-using slate::MethodGemm::str2methodGemm;
-using slate::MethodHemm::str2methodHemm;
-using slate::MethodTrsm::str2methodTrsm;
+using slate::MethodCholQR::methodCholQR2str;
+using slate::MethodCholQR::str2methodCholQR;
+using slate::MethodGels::methodGels2str;
+using slate::MethodGels::str2methodGels;
 using slate::MethodGemm::methodGemm2str;
+using slate::MethodGemm::str2methodGemm;
 using slate::MethodHemm::methodHemm2str;
+using slate::MethodHemm::str2methodHemm;
+using slate::MethodLU::methodLU2str;
+using slate::MethodLU::str2methodLU;
 using slate::MethodTrsm::methodTrsm2str;
+using slate::MethodTrsm::str2methodTrsm;
 
 using testsweeper::no_data_flag;
 
@@ -103,17 +109,20 @@ std::vector< testsweeper::routines_t > routines = {
     // LU
     { "gesv",               test_gesv,         Section::gesv },
     { "gesv_nopiv",         test_gesv,         Section::gesv },
+    { "gesv_tntpiv",        test_gesv,         Section::gesv },
     { "gesvMixed",          test_gesv,         Section::gesv },
     { "gbsv",               test_gbsv,         Section::gesv },
     { "",                   nullptr,           Section::newline },
 
     { "getrf",              test_gesv,          Section::gesv },
     { "getrf_nopiv",        test_gesv,          Section::gesv },
+    { "getrf_tntpiv",       test_gesv,          Section::gesv },
     { "gbtrf",              test_gbsv,          Section::gesv },
     { "",                   nullptr,            Section::newline },
 
     { "getrs",              test_gesv,         Section::gesv },
     { "getrs_nopiv",        test_gesv,         Section::gesv },
+    { "getrs_tntpiv",       test_gesv,         Section::gesv },
     { "gbtrs",              test_gbsv,         Section::gesv },
     { "",                   nullptr,           Section::newline },
 
@@ -123,6 +132,7 @@ std::vector< testsweeper::routines_t > routines = {
 
     { "trtri",              test_trtri,        Section::gesv },
     { "",                   nullptr,           Section::newline },
+    { "gecondest",          test_gecondest,    Section::gesv },
 
     // -----
     // Cholesky
@@ -172,6 +182,7 @@ std::vector< testsweeper::routines_t > routines = {
     // -----
     // QR, LQ, RQ, QL
     { "geqrf",              test_geqrf,     Section::qr },
+    { "cholqr",             test_geqrf,     Section::qr },
     { "gelqf",              test_gelqf,     Section::qr },
     //{ "geqlf",              test_geqlf,     Section::qr },
     //{ "gerqf",              test_gerqf,     Section::qr },
@@ -188,6 +199,7 @@ std::vector< testsweeper::routines_t > routines = {
     //{ "unmql",              test_unmql,     Section::qr },
     //{ "unmrq",              test_unmrq,     Section::qr },
     { "",                   nullptr,        Section::newline },
+    { "trcondest",          test_trcondest, Section::qr },
 
     // -----
     // symmetric/Hermitian eigenvalues
@@ -234,6 +246,7 @@ std::vector< testsweeper::routines_t > routines = {
 
     { "trnorm",             test_trnorm,       Section::aux_norm },
     { "",                   nullptr,           Section::newline },
+
     // -----
     // auxiliary
     { "add",                test_add,          Section::aux },
@@ -241,18 +254,24 @@ std::vector< testsweeper::routines_t > routines = {
     { "tradd",              test_add,          Section::aux },
     { "syadd",              test_add,          Section::aux },
     { "headd",              test_add,          Section::aux },
+    { "",                   nullptr,           Section::newline },
 
     { "copy",               test_copy,         Section::aux },
     { "tzcopy",             test_copy,         Section::aux },
     { "trcopy",             test_copy,         Section::aux },
     { "sycopy",             test_copy,         Section::aux },
     { "hecopy",             test_copy,         Section::aux },
+    { "",                   nullptr,           Section::newline },
 
     { "scale",              test_scale,        Section::aux },
     { "tzscale",            test_scale,        Section::aux },
     { "trscale",            test_scale,        Section::aux },
     { "syscale",            test_scale,        Section::aux },
     { "hescale",            test_scale,        Section::aux },
+    { "",                   nullptr,           Section::newline },
+
+    { "scale_row_col",      test_scale_row_col, Section::aux },
+    { "",                   nullptr,           Section::newline },
 
     { "set",                test_set,          Section::aux },
     { "tzset",              test_set,          Section::aux },
@@ -311,9 +330,12 @@ Params::Params():
     origin    ("origin",  6,    ParamType::List, slate::Origin::Host,     str2origin,   origin2str,   "origin: h=Host, s=ScaLAPACK, d=Devices"),
     target    ("target",  6,    ParamType::List, slate::Target::HostTask, str2target,   target2str,   "target: t=HostTask, n=HostNest, b=HostBatch, d=Devices"),
 
-    method_gemm ("method-gemm", 4, ParamType::List, 0, str2methodGemm,   methodGemm2str,   "method-gemm: auto=auto, A=gemmA, C=gemmC"),
-    method_hemm ("method-hemm", 4, ParamType::List, 0, str2methodHemm,   methodHemm2str,   "method-hemm: auto=auto, A=hemmA, C=hemmC"),
-    method_trsm ("method-trsm", 4, ParamType::List, 0, str2methodTrsm,   methodTrsm2str,   "method-trsm: auto=auto, A=trsmA, B=trsmB"),
+    method_cholQR ("method-cholQR", 6, ParamType::List, 0, str2methodCholQR, methodCholQR2str, "method-cholQR: auto=auto, herkC, gemmA, gemmC"),
+    method_gels   ("method-gels",   6, ParamType::List, 0, str2methodGels,   methodGels2str,   "method-gels: auto=auto, qr, cholqr"),
+    method_gemm   ("method-gemm",   4, ParamType::List, 0, str2methodGemm,   methodGemm2str,   "method-gemm: auto=auto, A=gemmA, C=gemmC"),
+    method_hemm   ("method-hemm",   4, ParamType::List, 0, str2methodHemm,   methodHemm2str,   "method-hemm: auto=auto, A=hemmA, C=hemmC"),
+    method_lu     ("method-lu",     5, ParamType::List, slate::MethodLU::PartialPiv, str2methodLU, methodLU2str, "method-lu: PartialPiv, CALU, NoPiv"),
+    method_trsm   ("method-trsm",   4, ParamType::List, 0, str2methodTrsm,   methodTrsm2str,   "method-trsm: auto=auto, A=trsmA, B=trsmB"),
 
     grid_order("grid-order", 3, ParamType::List, slate::GridOrder::Col,   str2grid_order, grid_order2str, "(go) MPI grid order: c=Col, r=Row"),
     tile_release_strategy ("trs", 3, ParamType::List, slate::TileReleaseStrategy::All, str2tile_release_strategy,   tile_release_strategy2str,   "tile release strategy: n=none, i=only internal routines, s=only top-level routines in slate namespace, a=all routines"),
@@ -336,6 +358,7 @@ Params::Params():
     transB    ("transB",  7,    ParamType::List, slate::Op::NoTrans,      blas::char2op,     blas::op2char,     blas::op2str,     "transpose of B: n=no-trans, t=trans, c=conj-trans"),
     diag      ("diag",    7,    ParamType::List, slate::Diag::NonUnit,    blas::char2diag,   blas::diag2char,   blas::diag2str,   "diagonal: n=non-unit, u=unit"),
     direction ("direction", 8,  ParamType::List, slate::Direction::Forward, lapack::char2direction, lapack::direction2char, lapack::direction2str, "direction: f=forward, b=backward"),
+    equed     ("equed",   5,    ParamType::List, slate::Equed::Both, lapack::char2equed, lapack::equed2char, lapack::equed2str, "row & col scaling (equilibration): b=both, r=row, c=col, n=none"),
     storev    ("storev", 10,    ParamType::List, lapack::StoreV::Columnwise, lapack::char2storev, lapack::storev2char, lapack::storev2str, "store vectors: c=columnwise, r=rowwise"),
 
     matrixtype( "matrixtype", 10, ParamType::List, lapack::MatrixType::General,
@@ -377,6 +400,9 @@ Params::Params():
     // ----- output parameters
     // min, max are ignored
     //          name,           w, p, type,              default,      min, max, help
+    value      ("value",        9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical value"),
+    value2     ("value2",       9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical value"),
+    value3     ("value3",       9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical value"),
     error      ("error",        9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical error"),
     error2     ("error2",       9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical error"),
     error3     ("error3",       9, 2, ParamType::Output, no_data_flag,   0,   0, "numerical error"),
@@ -410,8 +436,11 @@ Params::Params():
     grid_order.name("go", "grid-order");
 
     // Change name for the methods to use less space in the stdout
+    method_cholQR.name("cholQR", "method-cholQR");
+    method_gels.name("gels", "method-gels");
     method_gemm.name("gemm", "method-gemm");
     method_hemm.name("hemm", "method-hemm");
+    method_lu.name("lu", "method-lu");
     method_trsm.name("trsm", "method-trsm");
 
     // change names of matrix B's params
@@ -690,12 +719,15 @@ int run(int argc, char** argv)
 
         if (print) {
             if (status) {
-                printf("%d tests FAILED.\n", status);
+                printf( "%d tests FAILED: %s\n", status, routine );
             }
             else {
-                printf("All tests passed.\n");
+                printf( "All tests passed: %s\n", routine );
             }
         }
+
+        // Exit status is only 8 bits, and reserve status = 251, ..., 255.
+        status = std::min( status, 250 );
     }
     catch (const QuitException& ex) {
         // pass: no error to print
@@ -705,7 +737,7 @@ int run(int argc, char** argv)
     }
     int err = print_reduce_error(msg, mpi_rank, MPI_COMM_WORLD);
     if (err)
-        status = -1;
+        status = 254;
 
     slate_mpi_call(
         MPI_Finalize());

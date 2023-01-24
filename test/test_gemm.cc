@@ -18,7 +18,6 @@
 #include <cstdlib>
 #include <utility>
 
-#define SLATE_HAVE_SCALAPACK
 //------------------------------------------------------------------------------
 template<typename scalar_t>
 void test_gemm_work(Params& params, bool run)
@@ -45,16 +44,13 @@ void test_gemm_work(Params& params, bool run)
     bool ref_only = params.ref() == 'o';
     slate::Norm norm = params.norm();
     bool ref = params.ref() == 'y' || ref_only;
-    #ifndef SLATE_HAVE_SCALAPACK
-        ref = false;
-        ref_only = false;
-    #endif
     bool check = params.check() == 'y' && ! ref_only;
     bool trace = params.trace() == 'y';
     int verbose = params.verbose();
     slate::Origin origin = params.origin();
     slate::Target target = params.target();
     slate::GridOrder grid_order = params.grid_order();
+    slate::Method method_gemm = params.method_gemm();
     params.matrix.mark();
     params.matrixB.mark();
     params.matrixC.mark();
@@ -72,14 +68,9 @@ void test_gemm_work(Params& params, bool run)
     if (! run)
         return;
 
-    // skip invalid or unimplemented options
-    if (params.routine == "gemmA" && target != slate::Target::HostTask) {
-        params.msg() = "skipping: currently gemmA is only implemented for HostTask";
-        return;
-    }
-
     slate::Options const opts =  {
         {slate::Option::Lookahead, lookahead},
+        {slate::Option::MethodGemm, method_gemm},
         {slate::Option::Target, target}
     };
 
@@ -271,8 +262,8 @@ void test_gemm_work(Params& params, bool run)
         params.okay() = (params.error() <= 3*eps);
     }
 
-    #ifdef SLATE_HAVE_SCALAPACK
-        if (ref) {
+    if (ref) {
+        #ifdef SLATE_HAVE_SCALAPACK
             // comparison with reference routine from ScaLAPACK
 
             // BLACS/MPI variables
@@ -310,12 +301,6 @@ void test_gemm_work(Params& params, bool run)
                 copy(C, &C_data[0], C_desc);
             }
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             print_matrix( "Cref", Cref, params );
 
             //==================================================
@@ -348,16 +333,17 @@ void test_gemm_work(Params& params, bool run)
             params.ref_gflops() = gflop / time;
             params.error() = error;
 
-            slate_set_num_blas_threads(saved_num_threads);
-
             // Allow 3*eps; complex needs 2*sqrt(2) factor; see Higham, 2002, sec. 3.6.
             real_t eps = std::numeric_limits<real_t>::epsilon();
             params.okay() = (params.error() <= 3*eps);
 
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
-        }
-    #endif
+        #else  // not SLATE_HAVE_SCALAPACK
+            if (mpi_rank == 0)
+                printf( "ScaLAPACK not available\n" );
+        #endif
+    }
 }
 
 // -----------------------------------------------------------------------------

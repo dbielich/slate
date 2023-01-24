@@ -15,7 +15,6 @@ namespace slate {
 namespace device {
 
 template <>
-
 void tzscale(
     Uplo uplo,
     int64_t m, int64_t n,
@@ -23,13 +22,13 @@ void tzscale(
     std::complex<float>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzscale(uplo, m, n,
             numer, denom,
             (cuFloatComplex**) Aarray, lda,
             batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzscale(uplo, m, n,
             numer, denom,
             (hipFloatComplex**) Aarray, lda,
@@ -45,13 +44,13 @@ void tzscale(
     std::complex<double>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzscale(uplo, m, n,
             numer, denom,
             (cuDoubleComplex**) Aarray, lda,
             batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzscale(uplo, m, n,
             numer, denom,
             (hipDoubleComplex**) Aarray, lda,
@@ -59,7 +58,7 @@ void tzscale(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void tzscale(
@@ -80,7 +79,7 @@ void tzscale(
     int64_t batch_count, blas::Queue& queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -90,7 +89,7 @@ namespace internal {
 //------------------------------------------------------------------------------
 /// Scale Trapezoid matrix entries by the real scalar numer/denom.
 /// Dispatches to target implementations.
-/// @ingroup set_internal
+/// @ingroup scale_internal
 ///
 template <Target target, typename scalar_t>
 void scale(
@@ -106,7 +105,7 @@ void scale(
 /// Scale Trapezoid matrix entries by the real scalar numer/denom.
 /// TODO handle transpose A case
 /// Host OpenMP task implementation.
-/// @ingroup set_internal
+/// @ingroup scale_internal
 ///
 template <typename scalar_t>
 void scale(
@@ -115,7 +114,7 @@ void scale(
     BaseTrapezoidMatrix<scalar_t>& A,
     int priority, int queue_index)
 {
-    // trace::Block trace_block("set");
+    // trace::Block trace_block("scale");
     #pragma omp taskgroup
     if (A.uplo() == Uplo::Lower) {
         for (int64_t j = 0; j < A.nt(); ++j) {
@@ -173,7 +172,7 @@ void scale(internal::TargetType<Target::HostBatch>,
 /// Scale Trapezoid matrix entries by the real scalar numer/denom.
 /// TODO handle transpose A case
 /// GPU device implementation.
-/// @ingroup set_internal
+/// @ingroup scale_internal
 ///
 template <typename scalar_t>
 void scale(internal::TargetType<Target::Devices>,
@@ -183,6 +182,8 @@ void scale(internal::TargetType<Target::Devices>,
 {
     using ij_tuple = typename BaseTrapezoidMatrix<scalar_t>::ij_tuple;
 
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[4][2] = {
         { 0,        A.mt()-1 },
         { A.mt()-1, A.mt()   },
@@ -303,7 +304,7 @@ void scale(internal::TargetType<Target::Devices>,
 
             for (int q = 0; q < 4; ++q) {
                 if (group_count[q] > 0) {
-                    device::gescale(mb[q], nb[q],
+                    device::batch::gescale(mb[q], nb[q],
                                     numer, denom, a_array_dev, lda[q],
                                     group_count[q], *queue);
                     a_array_dev += group_count[q];

@@ -11,6 +11,8 @@
 
 namespace slate {
 
+namespace impl {
+
 //------------------------------------------------------------------------------
 /// @internal
 /// Distributed parallel general matrix-matrix multiplication.
@@ -21,20 +23,31 @@ namespace slate {
 /// - bcasts can get ahead of gemms by the value of lookahead.
 /// ColMajor layout is assumed
 ///
-/// @ingroup gemm_specialization
+/// @ingroup gemm_impl
 ///
 template <Target target, typename scalar_t>
-void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
-                           Matrix<scalar_t>& B,
-           scalar_t beta,  Matrix<scalar_t>& C,
-           Options const& opts)
+void gemmC(
+    scalar_t alpha, Matrix<scalar_t>& A,
+                    Matrix<scalar_t>& B,
+    scalar_t beta,  Matrix<scalar_t>& C,
+    Options const& opts )
 {
     using BcastListTag = typename Matrix<scalar_t>::BcastListTag;
 
+    trace::Block gemm_block( "gemm" );
+
+    // Constants
+    const scalar_t one = 1.0;
+    const Layout layout = Layout::ColMajor;
+
+    // Options
     int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
-    // Assumes column major
-    const Layout layout = Layout::ColMajor;
+    // Use only TileReleaseStrategy::Slate for gemm.
+    // Internal gemm routine called here won't release
+    // any tiles. This routine will clean up tiles.
+    Options opts2 = opts;
+    opts2[ Option::TileReleaseStrategy ] = TileReleaseStrategy::Slate;
 
     // OpenMP needs pointer types, but vectors are exception safe
     std::vector<uint8_t> bcast_vector(A.nt());
@@ -43,6 +56,8 @@ void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
     uint8_t* bcast = bcast_vector.data();
     uint8_t* gemm  =  gemm_vector.data();
     uint8_t* c     =     c_vector.data();
+    const int default_priority = 0;
+    const int default_queue = 0;
 
     if (target == Target::Devices) {
         C.allocateBatchArrays();
@@ -108,7 +123,18 @@ void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
                     alpha, A.sub(0, A.mt()-1, 0, 0),
                            B.sub(0, 0, 0, B.nt()-1),
                     beta,  std::move(C),
-                    layout);
+                    layout, default_priority, default_queue, opts2);
+
+            auto A_colblock = A.sub(0, A.mt()-1, 0, 0);
+            auto B_rowblock = B.sub(0, 0, 0, B.nt()-1);
+
+            // Erase remote tiles on all devices including host
+            A_colblock.eraseRemoteWorkspace();
+            B_rowblock.eraseRemoteWorkspace();
+
+            // Erase local workspace on devices.
+            A_colblock.eraseLocalWorkspace();
+            B_rowblock.eraseLocalWorkspace();
         }
 
         for (int64_t k = 1; k < A.nt(); ++k) {
@@ -143,10 +169,21 @@ void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
                              depend(out:gemm[k])
             {
                 internal::gemm<target>(
-                    alpha,         A.sub(0, A.mt()-1, k, k),
-                                   B.sub(k, k, 0, B.nt()-1),
-                    scalar_t(1.0), std::move(C),
-                    layout);
+                    alpha, A.sub(0, A.mt()-1, k, k),
+                           B.sub(k, k, 0, B.nt()-1),
+                    one,   std::move( C ),
+                    layout, default_priority, default_queue, opts2);
+
+                auto A_colblock = A.sub(0, A.mt()-1, k, k);
+                auto B_rowblock = B.sub(k, k, 0, B.nt()-1);
+
+                // Erase remote tiles on all devices including host
+                A_colblock.eraseRemoteWorkspace();
+                B_rowblock.eraseRemoteWorkspace();
+
+                // Erase local workspace on devices.
+                A_colblock.eraseLocalWorkspace();
+                B_rowblock.eraseLocalWorkspace();
             }
         }
         #pragma omp taskwait
@@ -154,6 +191,8 @@ void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
     }
     C.releaseWorkspace();
 }
+
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel general matrix-matrix multiplication.
@@ -204,26 +243,30 @@ void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
 /// @ingroup gemm
 ///
 template <typename scalar_t>
-void gemmC(scalar_t alpha, Matrix<scalar_t>& A,
-                           Matrix<scalar_t>& B,
-           scalar_t beta,  Matrix<scalar_t>& C,
-           Options const& opts)
+void gemmC(
+    scalar_t alpha, Matrix<scalar_t>& A,
+                    Matrix<scalar_t>& B,
+    scalar_t beta,  Matrix<scalar_t>& C,
+    Options const& opts)
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            gemmC<Target::HostTask>(alpha, A, B, beta, C, opts);
+            impl::gemmC<Target::HostTask>( alpha, A, B, beta, C, opts );
             break;
+
         case Target::HostNest:
-            gemmC<Target::HostNest>(alpha, A, B, beta, C, opts);
+            impl::gemmC<Target::HostNest>( alpha, A, B, beta, C, opts );
             break;
+
         case Target::HostBatch:
-            gemmC<Target::HostBatch>(alpha, A, B, beta, C, opts);
+            impl::gemmC<Target::HostBatch>( alpha, A, B, beta, C, opts );
             break;
+
         case Target::Devices:
-            gemmC<Target::Devices>(alpha, A, B, beta, C, opts);
+            impl::gemmC<Target::Devices>( alpha, A, B, beta, C, opts );
             break;
     }
 }

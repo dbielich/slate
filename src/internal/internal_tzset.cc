@@ -24,11 +24,11 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<float> offdiag_value, std::complex<float> diag_value,
+    std::complex<float> const& offdiag_value, std::complex<float> const& diag_value,
     std::complex<float>* A, int64_t lda,
     blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzset(
         uplo, m, n,
         make_cuFloatComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -36,7 +36,7 @@ void tzset(
         (cuFloatComplex*) A, lda,
         queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzset(
         uplo, m, n,
         make_hipFloatComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -51,11 +51,11 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<double> offdiag_value, std::complex<double> diag_value,
+    std::complex<double> const& offdiag_value, std::complex<double> const& diag_value,
     std::complex<double>* A, int64_t lda,
     blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzset(
         uplo, m, n,
         make_cuDoubleComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -63,7 +63,7 @@ void tzset(
         (cuDoubleComplex*) A, lda,
         queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzset(
         uplo, m, n,
         make_hipDoubleComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -73,14 +73,14 @@ void tzset(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 //----------------------------------------
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    double offdiag_value, double diag_value,
+    double const& offdiag_value, double const& diag_value,
     double* A, int64_t lda,
     blas::Queue& queue)
 {
@@ -91,12 +91,12 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    float offdiag_value, float diag_value,
+    float const& offdiag_value, float const& diag_value,
     float* A, int64_t lda,
     blas::Queue& queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 //==============================================================================
 namespace batch {
@@ -107,11 +107,11 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<float> offdiag_value, std::complex<float> diag_value,
+    std::complex<float> const& offdiag_value, std::complex<float> const& diag_value,
     std::complex<float>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     batch::tzset(
         uplo, m, n,
         make_cuFloatComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -119,7 +119,7 @@ void tzset(
         (cuFloatComplex**) Aarray, lda,
         batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     batch::tzset(
         uplo, m, n,
         make_hipFloatComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -134,11 +134,11 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<double> offdiag_value, std::complex<double> diag_value,
+    std::complex<double> const& offdiag_value, std::complex<double> const& diag_value,
     std::complex<double>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     batch::tzset(
         uplo, m, n,
         make_cuDoubleComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -146,7 +146,7 @@ void tzset(
         (cuDoubleComplex**) Aarray, lda,
         batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     batch::tzset(
         uplo, m, n,
         make_hipDoubleComplex( offdiag_value.real(), offdiag_value.imag() ),
@@ -156,14 +156,14 @@ void tzset(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 //----------------------------------------
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    double offdiag_value, double diag_value,
+    double const& offdiag_value, double const& diag_value,
     double** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
@@ -174,12 +174,12 @@ template <>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    float offdiag_value, float diag_value,
+    float const& offdiag_value, float const& diag_value,
     float** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace batch
 } // namespace device
@@ -294,12 +294,13 @@ void set(
 {
     using ij_tuple = typename BaseTrapezoidMatrix<scalar_t>::ij_tuple;
 
-    // Quadrants
-    // Ranges are [ begin, end ).
-    // 0 is interior          [ 0 : mt-2, 0 : nt-2 ]
-    // 1 is bottom row        [ mt-1,     0 : nt-2 ]
-    // 2 is right  col        [ 0 : mt-2, nt-1     ]
-    // 3 is bottom-right tile [ mt-1,     nt-1     ]
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
+    // Ranges begin : end are [ begin, end ), exclusive of end.
+    // 0 is interior          [ 0 : mt-1, 0 : nt-1 ]
+    // 1 is bottom row        [     mt-1, 0 : nt-1 ]
+    // 2 is right  col        [ 0 : mt-1,     nt-1 ]
+    // 3 is bottom-right tile [     mt-1,     nt-1 ]
     // 0-3 are for off-diagonal tiles.
     // 4-7 are the same as 0-3, respectively, but for diagonal tiles.
     int64_t irange[4][2] = {
@@ -435,7 +436,7 @@ void set(
 
             for (int q = 0; q < 4; ++q) {
                 if (group_count[q] > 0) {
-                    device::geset(
+                    device::batch::geset(
                         mb[q], nb[q],
                         offdiag_value, offdiag_value,
                         a_array_dev, lda[q],

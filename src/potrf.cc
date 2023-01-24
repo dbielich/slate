@@ -12,27 +12,30 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::potrf from impl::potrf
 namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel Cholesky factorization.
 /// Generic implementation for any target.
 /// Panel and lookahead computed on host using Host OpenMP task.
-/// @ingroup posv_specialization
+/// @ingroup posv_impl
 ///
 template <Target target, typename scalar_t>
-void potrf(slate::internal::TargetType<target>,
-           HermitianMatrix<scalar_t> A, Options const& opts)
+void potrf(
+    slate::internal::TargetType<target>,
+    HermitianMatrix<scalar_t> A,
+    Options const& opts )
 {
     using real_t = blas::real_type<scalar_t>;
     using BcastListTag = typename Matrix<scalar_t>::BcastListTag;
 
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
+    const scalar_t one = 1.0;
 
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
     // if upper, change to lower
     if (A.uplo() == Uplo::Upper) {
@@ -67,7 +70,7 @@ void potrf(slate::internal::TargetType<target>,
                     auto Tkk = TriangularMatrix< scalar_t >(Diag::NonUnit, Akk);
                     internal::trsm<Target::HostTask>(
                         Side::Right,
-                        scalar_t(1.0), conjTranspose(Tkk),
+                        one, conj_transpose( Tkk ),
                         A.sub(k+1, A_nt-1, k, k), 1);
                 }
 
@@ -95,9 +98,9 @@ void potrf(slate::internal::TargetType<target>,
                     if (j+1 <= A_nt-1) {
                         auto Ajk = A.sub(j, j, k, k);
                         internal::gemm<Target::HostTask>(
-                            scalar_t(-1.0), A.sub(j+1, A_nt-1, k, k),
-                                            conjTranspose(Ajk),
-                            scalar_t(1.0), A.sub(j+1, A_nt-1, j, j),
+                            -one, A.sub(j+1, A_nt-1, k, k),
+                                  conj_transpose( Ajk ),
+                            one,  A.sub(j+1, A_nt-1, j, j),
                             layout, 1);
                     }
                 }
@@ -132,14 +135,24 @@ void potrf(slate::internal::TargetType<target>,
 //------------------------------------------------------------------------------
 /// Distributed parallel Cholesky factorization.
 /// GPU device batched cuBLAS implementation.
-/// @ingroup posv_specialization
+/// @ingroup posv_impl
 ///
-template <Target target, typename scalar_t>
-void potrf(slate::internal::TargetType<Target::Devices>,
-           HermitianMatrix<scalar_t> A, Options const& opts)
+template <typename scalar_t>
+void potrf(
+    slate::internal::TargetType<Target::Devices>,
+    HermitianMatrix<scalar_t> A,
+    Options const& opts )
 {
     using real_t = blas::real_type<scalar_t>;
     using BcastListTag = typename Matrix<scalar_t>::BcastListTag;
+
+    const scalar_t one = 1.0;
+
+    // Assumes column major
+    const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
     // Use only TileReleaseStrategy::Slate for potrf.
     // Internal routines (trsm, herk, gemm) called in
@@ -148,12 +161,8 @@ void potrf(slate::internal::TargetType<Target::Devices>,
     Options opts2 = Options( opts );
     opts2[ Option::TileReleaseStrategy ] = TileReleaseStrategy::Slate;
 
-    int64_t lookahead = get_option<int64_t>( opts2, Option::Lookahead, 1 );
     bool hold_local_workspace = get_option<bool>(
             opts2, Option::HoldLocalWorkspace, 0 );
-
-    // Assumes column major
-    const Layout layout = Layout::ColMajor;
 
     // if upper, change to lower
     if (A.uplo() == Uplo::Upper) {
@@ -168,11 +177,13 @@ void potrf(slate::internal::TargetType<Target::Devices>,
     const int priority_zero = 0;
     const int queue_0 = 0;
     const int queue_1 = 1;
+    const int queue_2 = 2;
     const int64_t batch_size_zero = 0;
-    const int num_queues = 2 + lookahead;  // Number of kernels with lookahead
+    const int num_queues = 3 + lookahead;  // Number of kernels with lookahead
 
     // Allocate batch arrays = number of kernels without lookahead + lookahead
-    // number of kernels without lookahead = 2 (internal::gemm & internal::trsm)
+    // number of kernels without lookahead = 3
+    // (internal::potrf, internal::gemm, and internal::trsm)
     // whereas internal::herk will be executed as many as lookaheads, thus
     // internal::herk needs batch arrays equal to the number of lookaheads
     // and the batch_arrays_index starts from
@@ -180,6 +191,14 @@ void potrf(slate::internal::TargetType<Target::Devices>,
     // for every execution for the internal::herk
     A.allocateBatchArrays(batch_size_zero, num_queues);
     A.reserveDeviceWorkspace();
+
+    // Allocate
+    using lapack::device_info_int;
+    std::vector< device_info_int* > device_info_array( A.num_devices(), nullptr );
+    for (int64_t dev = 0; dev < A.num_devices(); ++dev) {
+        blas::Queue* queue = A.comm_queue(dev);
+        device_info_array[dev] = blas::device_malloc<device_info_int>( 1, *queue );
+    }
 
     // set min number for omp nested active parallel regions
     slate::OmpSetMaxActiveLevels set_active_levels( MinOmpActiveLevels );
@@ -192,7 +211,9 @@ void potrf(slate::internal::TargetType<Target::Devices>,
             #pragma omp task depend(inout:column[k])
             {
                 // factor A(k, k)
-                internal::potrf<Target::HostTask>(A.sub(k, k));
+                internal::potrf<Target::Devices>(
+                    A.sub(k, k), priority_zero, queue_2,
+                    device_info_array[A.tileDevice( k, k )]);
 
                 // send A(k, k) down col A(k+1:nt-1, k)
                 if (k+1 <= A_nt-1)
@@ -204,8 +225,8 @@ void potrf(slate::internal::TargetType<Target::Devices>,
                     auto Tkk = TriangularMatrix< scalar_t >(Diag::NonUnit, Akk);
                     internal::trsm<Target::Devices>(
                         Side::Right,
-                        scalar_t(1.0), conjTranspose(Tkk),
-                                       A.sub(k+1, A_nt-1, k, k),
+                        one, conj_transpose( Tkk ),
+                        A.sub(k+1, A_nt-1, k, k),
                         priority_zero, layout, queue_1, opts2);
                 }
 
@@ -251,16 +272,16 @@ void potrf(slate::internal::TargetType<Target::Devices>,
                     internal::herk<Target::Devices>(
                         real_t(-1.0), A.sub(j, j, k, k),
                         real_t( 1.0), A.sub(j, j),
-                        priority_zero, j-k+1, layout, opts2);
+                        priority_zero, j-k+2, layout, opts2);
 
                     // A(j+1:nt, j) -= A(j+1:nt-1, k) * A(j, k)^H
                     if (j+1 <= A_nt-1) {
                         auto Ajk = A.sub(j, j, k, k);
                         internal::gemm<Target::Devices>(
-                            scalar_t(-1.0), A.sub(j+1, A_nt-1, k, k),
-                                            conjTranspose(Ajk),
-                            scalar_t( 1.0), A.sub(j+1, A_nt-1, j, j),
-                            layout, priority_zero, j-k+1, opts2);
+                            -one, A.sub(j+1, A_nt-1, k, k),
+                                  conj_transpose( Ajk ),
+                            one,  A.sub(j+1, A_nt-1, j, j),
+                            layout, priority_zero, j-k+2, opts2);
                     }
                 }
             }
@@ -286,6 +307,10 @@ void potrf(slate::internal::TargetType<Target::Devices>,
     if (hold_local_workspace == false) {
         A.releaseWorkspace();
     }
+    for (int64_t dev = 0; dev < A.num_devices(); ++dev) {
+        blas::Queue* queue = A.comm_queue(dev);
+        blas::device_free( device_info_array[dev], *queue );
+    }
 }
 
 } // namespace impl
@@ -305,6 +330,8 @@ void potrf(slate::internal::TargetType<Target::Devices>,
 ///     A = U^H U,
 /// \]
 /// if $A$ is stored upper, where $U$ is an upper triangular matrix.
+///
+/// Complexity (in real): $\approx \frac{1}{3} n^{3}$ flops.
 ///
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
@@ -337,29 +364,30 @@ void potrf(slate::internal::TargetType<Target::Devices>,
 /// @ingroup posv_computational
 ///
 template <typename scalar_t>
-void potrf(HermitianMatrix<scalar_t>& A,
-           Options const& opts)
+void potrf(
+    HermitianMatrix<scalar_t>& A,
+    Options const& opts)
 {
     using internal::TargetType;
+
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            impl::potrf<Target::HostTask>( TargetType<Target::HostTask>(),
-                                           A, opts);
+            impl::potrf( TargetType<Target::HostTask>(), A, opts );
             break;
+
         case Target::HostNest:
-            impl::potrf<Target::HostNest>( TargetType<Target::HostNest>(),
-                                           A, opts);
+            impl::potrf( TargetType<Target::HostNest>(), A, opts );
             break;
+
         case Target::HostBatch:
-            impl::potrf<Target::HostBatch>( TargetType<Target::HostBatch>(),
-                                            A, opts);
+            impl::potrf( TargetType<Target::HostBatch>(), A, opts );
             break;
+
         case Target::Devices:
-            impl::potrf<Target::Devices>( TargetType<Target::Devices>(),
-                                          A, opts);
+            impl::potrf( TargetType<Target::Devices>(), A, opts );
             break;
     }
     // todo: return value for errors?

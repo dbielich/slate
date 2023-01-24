@@ -16,7 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
-#define SLATE_HAVE_SCALAPACK
+
 //------------------------------------------------------------------------------
 template<typename scalar_t>
 void test_syrk_work(Params& params, bool run)
@@ -42,9 +42,6 @@ void test_syrk_work(Params& params, bool run)
     slate::Norm norm = params.norm();
     bool check = params.check() == 'y';
     bool ref = params.ref() == 'y';
-    #ifndef SLATE_HAVE_SCALAPACK
-        ref = false;
-    #endif
     bool trace = params.trace() == 'y';
     slate::Origin origin = params.origin();
     slate::Target target = params.target();
@@ -239,12 +236,6 @@ void test_syrk_work(Params& params, bool run)
                 copy( C, &C_data[0], C_desc );
             }
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             // allocate workspace for norms
             size_t ldw = nb*ceil(ceil(mlocC / (double) nb) / (scalapack_ilcm(&p, &q) / p));
             std::vector<real_t> worklansy(2*nlocC + mlocC + ldw);
@@ -277,14 +268,12 @@ void test_syrk_work(Params& params, bool run)
             params.ref_gflops() = gflop / time;
             params.error() = error;
 
-            slate_set_num_blas_threads(saved_num_threads);
-
             real_t eps = std::numeric_limits<real_t>::epsilon();
             params.okay() = (params.error() <= 3*eps);
 
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
-        #else
+        #else  // not SLATE_HAVE_SCALAPACK
             if (mpi_rank == 0)
                 printf( "ScaLAPACK not available\n" );
         #endif

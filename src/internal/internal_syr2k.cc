@@ -10,12 +10,6 @@
 #include "internal/internal.hh"
 #include "internal/internal_batch.hh"
 
-#ifdef SLATE_WITH_MKL
-    #include <mkl_cblas.h>
-#else
-    #include <cblas.h>
-#endif
-
 namespace slate {
 namespace internal {
 
@@ -31,7 +25,7 @@ template <Target target, typename scalar_t>
 void syr2k(scalar_t alpha, Matrix<scalar_t>&& A,
                            Matrix<scalar_t>&& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>&& C,
-           int priority, int queue_index, Layout layout)
+           int priority, int queue_index, Layout layout, Options const& opts)
 {
     if (! ((C.uplo() == Uplo::Lower)
            &&
@@ -45,7 +39,7 @@ void syr2k(scalar_t alpha, Matrix<scalar_t>&& A,
           alpha, A,
                  B,
           beta,  C,
-          priority, queue_index, layout);
+          priority, queue_index, layout, opts);
 }
 
 //------------------------------------------------------------------------------
@@ -59,7 +53,7 @@ void syr2k(internal::TargetType<Target::HostTask>,
            scalar_t alpha, Matrix<scalar_t>& A,
                            Matrix<scalar_t>& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>& C,
-           int priority, int queue_index, Layout layout)
+           int priority, int queue_index, Layout layout, Options const& opts)
 {
     // CPU assumes column major
     // todo: relax this assumption, by allowing Tile_blas.hh::syr2k()
@@ -67,6 +61,12 @@ void syr2k(internal::TargetType<Target::HostTask>,
     // todo: optimize for the number of layout conversions,
     //       by watching 'layout' and 'C(i, j).layout()'
     assert(layout == Layout::ColMajor);
+
+    TileReleaseStrategy tile_release_strategy = get_option(
+            opts, Option::TileReleaseStrategy, TileReleaseStrategy::All );
+
+    bool call_tile_tick = tile_release_strategy == TileReleaseStrategy::Internal
+                          || tile_release_strategy == TileReleaseStrategy::All;
 
     int err = 0;
     #pragma omp taskgroup
@@ -76,18 +76,21 @@ void syr2k(internal::TargetType<Target::HostTask>,
                 if (i == j) {
                     #pragma omp task slate_omp_default_none \
                         shared( A, B, C, err ) \
-                        firstprivate(j, layout, alpha, beta) priority(priority)
+                        firstprivate(j, layout, alpha, beta, call_tile_tick) \
+                        priority(priority)
                     {
                         try {
                             A.tileGetForReading(j, 0, LayoutConvert(layout));
                             B.tileGetForReading(j, 0, LayoutConvert(layout));
                             C.tileGetForWriting(j, j, LayoutConvert(layout));
-                            syr2k(alpha, A(j, 0),
-                                         B(j, 0),
-                                  beta,  C(j, j));
-                            // todo: should tileRelease()?
-                            A.tileTick(j, 0);
-                            B.tileTick(j, 0);
+                            tile::syr2k(
+                                alpha, A(j, 0), B(j, 0),
+                                beta,  C(j, j) );
+                            if (call_tile_tick) {
+                                // todo: should tileRelease()?
+                                A.tileTick( j, 0 );
+                                B.tileTick( j, 0 );
+                            }
                         }
                         catch (std::exception& e) {
                             err = __LINE__;
@@ -97,9 +100,12 @@ void syr2k(internal::TargetType<Target::HostTask>,
                 else {
                     #pragma omp task slate_omp_default_none \
                         shared( A, B, C, err ) \
-                        firstprivate(i, j, layout, alpha, beta) priority(priority)
+                        firstprivate(i, j, layout, alpha, beta, call_tile_tick) \
+                        priority(priority)
                     {
                         try {
+                            const scalar_t one = 1.0;
+
                             A.tileGetForReading(i, 0, LayoutConvert(layout));
                             A.tileGetForReading(j, 0, LayoutConvert(layout));
                             B.tileGetForReading(i, 0, LayoutConvert(layout));
@@ -107,17 +113,19 @@ void syr2k(internal::TargetType<Target::HostTask>,
                             C.tileGetForWriting(i, j, LayoutConvert(layout));
                             auto Aj0 = A(j, 0);
                             auto Bj0 = B(j, 0);
-                            gemm(alpha, A(i, 0),
-                                        transpose(Bj0),
-                                 beta,  C(i, j));
-                            gemm(alpha, B(i, 0),
-                                        transpose(Aj0),
-                                 scalar_t(1.0), C(i, j));
-                            // todo: should tileRelease()?
-                            A.tileTick(i, 0);
-                            A.tileTick(j, 0);
-                            B.tileTick(i, 0);
-                            B.tileTick(j, 0);
+                            tile::gemm(
+                                alpha, A(i, 0), transpose( Bj0 ),
+                                beta,  C(i, j) );
+                            tile::gemm(
+                                alpha, B(i, 0), transpose( Aj0 ),
+                                one,   C(i, j) );
+                            if (call_tile_tick) {
+                                // todo: should tileRelease()?
+                                A.tileTick( i, 0 );
+                                A.tileTick( j, 0 );
+                                B.tileTick( i, 0 );
+                                B.tileTick( j, 0 );
+                            }
                         }
                         catch (std::exception& e) {
                             err = __LINE__;
@@ -143,7 +151,7 @@ void syr2k(internal::TargetType<Target::HostNest>,
            scalar_t alpha, Matrix<scalar_t>& A,
                            Matrix<scalar_t>& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>& C,
-           int priority, int queue_index, Layout layout)
+           int priority, int queue_index, Layout layout, Options const& opts)
 {
     // CPU assumes column major
     // todo: relax this assumption, by allowing Tile_blas.hh::syr2k()
@@ -164,9 +172,9 @@ void syr2k(internal::TargetType<Target::HostNest>,
                     A.tileGetForReading(j, 0, LayoutConvert(layout));
                     B.tileGetForReading(j, 0, LayoutConvert(layout));
                     C.tileGetForWriting(j, j, LayoutConvert(layout));
-                    syr2k(alpha, A(j, 0),
-                                 B(j, 0),
-                          beta,  C(j, j));
+                    tile::syr2k(
+                        alpha, A(j, 0), B(j, 0),
+                        beta,  C(j, j) );
                     // todo: should tileRelease()?
                     A.tileTick(j, 0);
                     B.tileTick(j, 0);
@@ -189,17 +197,19 @@ void syr2k(internal::TargetType<Target::HostNest>,
             if (i >= j+1) {                     // strictly lower
                 if (C.tileIsLocal(i, j)) {
                     try {
+                        const scalar_t one = 1.0;
+
                         A.tileGetForReading(i, 0, LayoutConvert(layout));
                         B.tileGetForReading(j, 0, LayoutConvert(layout));
                         C.tileGetForWriting(i, j, LayoutConvert(layout));
                         auto Aj0 = A(j, 0);
                         auto Bj0 = B(j, 0);
-                        gemm(alpha, A(i, 0),
-                                    transpose(Bj0),
-                             beta,  C(i, j));
-                        gemm(alpha, B(i, 0),
-                                    transpose(Aj0),
-                             scalar_t(1.0), C(i, j));
+                        tile::gemm(
+                            alpha, A(i, 0), transpose( Bj0 ),
+                            beta,  C(i, j) );
+                        tile::gemm(
+                            alpha, B(i, 0), transpose( Aj0 ),
+                            one,   C(i, j) );
                         // todo: should tileRelease()?
                         A.tileTick(i, 0);
                         A.tileTick(j, 0);
@@ -229,8 +239,9 @@ void syr2k(internal::TargetType<Target::HostBatch>,
            scalar_t alpha, Matrix<scalar_t>& A,
                            Matrix<scalar_t>& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>& C,
-           int priority, int queue_index, Layout layout)
+           int priority, int queue_index, Layout layout, Options const& opts)
 {
+#ifdef BLAS_HAVE_MKL
     // CPU assumes column major
     // todo: relax this assumption, by allowing Tile_blas.hh::syr2k() to
     //       take layout param
@@ -251,9 +262,9 @@ void syr2k(internal::TargetType<Target::HostBatch>,
                     A.tileGetForReading(j, 0, LayoutConvert(layout));
                     B.tileGetForReading(j, 0, LayoutConvert(layout));
                     C.tileGetForWriting(j, j, LayoutConvert(layout));
-                    syr2k(alpha, A(j, 0),
-                                 B(j, 0),
-                          beta,  C(j, j));
+                    tile::syr2k(
+                        alpha, A(j, 0), B(j, 0),
+                        beta,  C(j, j) );
                     // todo: should tileRelease()?
                     A.tileTick(j, 0);
                     B.tileTick(j, 0);
@@ -360,34 +371,31 @@ void syr2k(internal::TargetType<Target::HostBatch>,
 
         {
             trace::Block trace_block("cblas_gemm_batch");
-            #ifdef SLATE_WITH_MKL
-                // mkl_set_num_threads_local(...);
-                cblas_gemm_batch(CblasColMajor,
-                                 opA_array.data(), opB_array.data(),
-                                 m_array.data(), n_array.data(), k_array.data(),
-                                 alpha_array.data(),
-                                 ai_array.data(), ldai_array.data(),
-                                 bj_array.data(), ldbj_array.data(),
-                                 beta_array.data(),
-                                 c_array.data(), ldc_array.data(),
-                                 batch_count, group_size.data());
+                const scalar_t one = 1.0;
 
-                // ai => bi, bj => aj, set beta = 1
-                std::fill(beta_array.begin(), beta_array.end(), scalar_t(1.0));
-                cblas_gemm_batch(CblasColMajor,
-                                 opA_array.data(), opB_array.data(),
-                                 m_array.data(), n_array.data(), k_array.data(),
-                                 alpha_array.data(),
-                                 bi_array.data(), ldbi_array.data(),
-                                 aj_array.data(), ldaj_array.data(),
-                                 beta_array.data(),
-                                 c_array.data(), ldc_array.data(),
-                                 batch_count, group_size.data());
-                // mkl_set_num_threads_local(1);
-            #else
-                slate_not_implemented(
-                    "slate::Target::HostBatch needs Intel MKL.");
-            #endif
+            // mkl_set_num_threads_local(...);
+            cblas_gemm_batch(CblasColMajor,
+                             opA_array.data(), opB_array.data(),
+                             m_array.data(), n_array.data(), k_array.data(),
+                             alpha_array.data(),
+                             ai_array.data(), ldai_array.data(),
+                             bj_array.data(), ldbj_array.data(),
+                             beta_array.data(),
+                             c_array.data(), ldc_array.data(),
+                             batch_count, group_size.data());
+
+            // ai => bi, bj => aj, set beta = 1
+            std::fill( beta_array.begin(), beta_array.end(), one );
+            cblas_gemm_batch(CblasColMajor,
+                             opA_array.data(), opB_array.data(),
+                             m_array.data(), n_array.data(), k_array.data(),
+                             alpha_array.data(),
+                             bi_array.data(), ldbi_array.data(),
+                             aj_array.data(), ldaj_array.data(),
+                             beta_array.data(),
+                             c_array.data(), ldc_array.data(),
+                             batch_count, group_size.data());
+            // mkl_set_num_threads_local(1);
         }
 
         for (int64_t j = 0; j < C.nt(); ++j) {
@@ -405,6 +413,10 @@ void syr2k(internal::TargetType<Target::HostBatch>,
 
     if (err)
         throw std::exception();
+#else
+    slate_not_implemented(
+        "slate::Target::HostBatch needs Intel MKL.");
+#endif
 }
 
 //------------------------------------------------------------------------------
@@ -418,10 +430,16 @@ void syr2k(internal::TargetType<Target::Devices>,
            scalar_t alpha, Matrix<scalar_t>& A,
                            Matrix<scalar_t>& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>& C,
-           int priority, int queue_index, Layout layout)
+           int priority, int queue_index, Layout layout, Options const& opts)
 {
     using std::swap;
     using ij_tuple = typename BaseMatrix<scalar_t>::ij_tuple;
+
+    TileReleaseStrategy tile_release_strategy = get_option(
+            opts, Option::TileReleaseStrategy, TileReleaseStrategy::All );
+
+    bool call_tile_tick = tile_release_strategy == TileReleaseStrategy::Internal
+                          || tile_release_strategy == TileReleaseStrategy::All;
 
     assert(C.num_devices() > 0);
 
@@ -433,7 +451,8 @@ void syr2k(internal::TargetType<Target::Devices>,
         if (C.tileIsLocal(0, 0)) {
             #pragma omp task slate_omp_default_none \
                 shared( A, B, C, err ) \
-                firstprivate(layout, alpha, beta, queue_index) priority(priority)
+                firstprivate(layout, alpha, beta, queue_index, call_tile_tick) \
+                priority(priority)
             {
                 int device = C.tileDevice(0, 0);
                 A.tileGetForReading(0, 0, device, LayoutConvert(layout));
@@ -455,12 +474,14 @@ void syr2k(internal::TargetType<Target::Devices>,
 
                 queue->sync();
 
-                A.tileRelease(0, 0, device);
-                B.tileRelease(0, 0, device);
-                A.tileTick(0, 0);
-                A.tileTick(0, 0);
-                B.tileTick(0, 0);
-                B.tileTick(0, 0);
+                if (call_tile_tick) {
+                    A.tileRelease(0, 0, device);
+                    B.tileRelease(0, 0, device);
+                    A.tileTick(0, 0);
+                    A.tileTick(0, 0);
+                    B.tileTick(0, 0);
+                    B.tileTick(0, 0);
+                }
             }
         }
     }
@@ -470,9 +491,12 @@ void syr2k(internal::TargetType<Target::Devices>,
         for (int device = 0; device < C.num_devices(); ++device) {
             #pragma omp task slate_omp_default_none \
                 shared( A, B, C, err ) \
-                firstprivate(device, layout, alpha, beta, queue_index) priority(priority)
+                firstprivate(device, layout, alpha, beta, queue_index, call_tile_tick) \
+                priority(priority)
             {
                 try {
+                    const scalar_t one = 1.0;
+
                     // if op(C) is NoTrans, invert opA, opB if possible
                     Op opA = A.op();
                     if (C.op() != Op::NoTrans) {
@@ -703,7 +727,7 @@ void syr2k(internal::TargetType<Target::Devices>,
 
                     {
                         trace::Block trace_block("blas::batch::gemm");
-                        std::vector<scalar_t> one_(1, scalar_t(1));
+                        std::vector<scalar_t> one_( 1, one );
 
                         if (c_array_gemm00.size() > 0) {
                             std::vector<int64_t>    m(1,  mb00);
@@ -850,22 +874,24 @@ void syr2k(internal::TargetType<Target::Devices>,
 
                     queue->sync();
 
-                    for (int64_t j = 0; j < C.nt(); ++j) {
-                        for (int64_t i = j; i < C.mt(); ++i) {  // lower
-                            if (C.tileIsLocal(i, j)
-                                && device == C.tileDevice(i, j))
-                            {
-                                // erase tmp local and remote device tiles;
-                                A.tileRelease(i, 0, device);
-                                A.tileRelease(j, 0, device);
-                                B.tileRelease(i, 0, device);
-                                B.tileRelease(j, 0, device);
-                                // decrement life for remote tiles
-                                // todo: should tileRelease()?
-                                A.tileTick(i, 0);
-                                A.tileTick(j, 0);
-                                B.tileTick(i, 0);
-                                B.tileTick(j, 0);
+                    if (call_tile_tick) {
+                        for (int64_t j = 0; j < C.nt(); ++j) {
+                            for (int64_t i = j; i < C.mt(); ++i) {  // lower
+                                if (C.tileIsLocal(i, j)
+                                    && device == C.tileDevice(i, j))
+                                {
+                                    // erase tmp local and remote device tiles;
+                                    A.tileRelease(i, 0, device);
+                                    A.tileRelease(j, 0, device);
+                                    B.tileRelease(i, 0, device);
+                                    B.tileRelease(j, 0, device);
+                                    // decrement life for remote tiles
+                                    // todo: should tileRelease()?
+                                    A.tileTick(i, 0);
+                                    A.tileTick(j, 0);
+                                    B.tileTick(i, 0);
+                                    B.tileTick(j, 0);
+                                }
                             }
                         }
                     }
@@ -889,28 +915,28 @@ void syr2k<Target::HostTask, float>(
     float alpha, Matrix<float>&& A,
                  Matrix<float>&& B,
     float beta,  SymmetricMatrix<float>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::HostNest, float>(
     float alpha, Matrix<float>&& A,
                  Matrix<float>&& B,
     float beta,  SymmetricMatrix<float>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::HostBatch, float>(
     float alpha, Matrix<float>&& A,
                  Matrix<float>&& B,
     float beta,  SymmetricMatrix<float>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::Devices, float>(
     float alpha, Matrix<float>&& A,
                  Matrix<float>&& B,
     float beta,  SymmetricMatrix<float>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 // ----------------------------------------
 template
@@ -918,28 +944,28 @@ void syr2k<Target::HostTask, double>(
     double alpha, Matrix<double>&& A,
                            Matrix<double>&& B,
     double beta,  SymmetricMatrix<double>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::HostNest, double>(
     double alpha, Matrix<double>&& A,
                   Matrix<double>&& B,
     double beta,  SymmetricMatrix<double>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::HostBatch, double>(
     double alpha, Matrix<double>&& A,
                   Matrix<double>&& B,
     double beta,  SymmetricMatrix<double>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k<Target::Devices, double>(
     double alpha, Matrix<double>&& A,
                   Matrix<double>&& B,
     double beta,  SymmetricMatrix<double>&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 // ----------------------------------------
 template
@@ -947,28 +973,28 @@ void syr2k< Target::HostTask, std::complex<float> >(
     std::complex<float> alpha, Matrix< std::complex<float> >&& A,
                                Matrix< std::complex<float> >&& B,
     std::complex<float> beta,  SymmetricMatrix< std::complex<float> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::HostNest, std::complex<float> >(
     std::complex<float> alpha, Matrix< std::complex<float> >&& A,
                                Matrix< std::complex<float> >&& B,
     std::complex<float> beta,  SymmetricMatrix< std::complex<float> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::HostBatch, std::complex<float> >(
     std::complex<float> alpha, Matrix< std::complex<float> >&& A,
                                Matrix< std::complex<float> >&& B,
     std::complex<float> beta,  SymmetricMatrix< std::complex<float> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::Devices, std::complex<float> >(
     std::complex<float> alpha, Matrix< std::complex<float> >&& A,
                                Matrix< std::complex<float> >&& B,
     std::complex<float> beta,  SymmetricMatrix< std::complex<float> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 // ----------------------------------------
 template
@@ -976,28 +1002,28 @@ void syr2k< Target::HostTask, std::complex<double> >(
     std::complex<double> alpha, Matrix< std::complex<double> >&& A,
                                 Matrix< std::complex<double> >&& B,
     std::complex<double> beta,  SymmetricMatrix< std::complex<double> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::HostNest, std::complex<double> >(
     std::complex<double> alpha, Matrix< std::complex<double> >&& A,
                                 Matrix< std::complex<double> >&& B,
     std::complex<double> beta,  SymmetricMatrix< std::complex<double> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::HostBatch, std::complex<double> >(
     std::complex<double> alpha, Matrix< std::complex<double> >&& A,
                                 Matrix< std::complex<double> >&& B,
     std::complex<double> beta,  SymmetricMatrix< std::complex<double> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 template
 void syr2k< Target::Devices, std::complex<double> >(
     std::complex<double> alpha, Matrix< std::complex<double> >&& A,
                                 Matrix< std::complex<double> >&& B,
     std::complex<double> beta,  SymmetricMatrix< std::complex<double> >&& C,
-    int priority, int queue_index, Layout layout);
+    int priority, int queue_index, Layout layout, Options const& opts);
 
 } // namespace internal
 } // namespace slate

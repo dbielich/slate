@@ -32,11 +32,11 @@ void henorm(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     henorm(in_norm, uplo, n, (cuFloatComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     henorm(in_norm, uplo, n, (hipFloatComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 #endif
@@ -51,17 +51,17 @@ void henorm(
     int64_t batch_count,
     blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     henorm(in_norm, uplo, n, (cuDoubleComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     henorm(in_norm, uplo, n, (hipDoubleComplex**) Aarray, lda,
            values, ldv, batch_count, queue);
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA.
 template <>
 void henorm(
@@ -84,7 +84,7 @@ void henorm(
     blas::Queue &queue)
 {
 }
-#endif // not SLATE_NO_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -437,19 +437,18 @@ void norm(
     }
 
     for (int device = 0; device < A.num_devices(); ++device) {
-        blas::set_device(device);
-
         int64_t num_tiles = A.getMaxDeviceTiles(device);
 
         a_host_arrays[device].resize(num_tiles);
         vals_host_arrays[device].resize(num_tiles*ldv);
 
-        a_dev_arrays[device] = blas::device_malloc<scalar_t*>(num_tiles);
-        vals_dev_arrays[device] = blas::device_malloc<real_t>(num_tiles*ldv);
+        blas::Queue* queue = A.comm_queue(device);
+        a_dev_arrays[device] = blas::device_malloc<scalar_t*>(num_tiles, *queue);
+        vals_dev_arrays[device] = blas::device_malloc<real_t>(num_tiles*ldv, *queue);
     }
 
-    // Define index ranges for quadrants of matrix.
-    // Tiles in each quadrant are all the same size.
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[6][2] = {
         // off-diagonal
         { 0,        A.mt()-1 },
@@ -623,9 +622,9 @@ void norm(
     // end omp taskgroup
 
     for (int device = 0; device < A.num_devices(); ++device) {
-        blas::set_device(device);
-        blas::device_free(a_dev_arrays[device]);
-        blas::device_free(vals_dev_arrays[device]);
+        blas::Queue* queue = A.compute_queue(device, queue_index);
+        blas::device_free(a_dev_arrays[device], *queue);
+        blas::device_free(vals_dev_arrays[device], *queue);
     }
 
     // Reduction over devices to local result.

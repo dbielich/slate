@@ -16,6 +16,8 @@ namespace slate {
 template <typename scalar_t>
 class Tile;
 
+namespace tile {
+
 //------------------------------------------------------------------------------
 /// Copy and precision conversion.
 /// @ingroup copy_tile
@@ -27,6 +29,9 @@ void gecopy(Tile<src_scalar_t> const& A, Tile<dst_scalar_t>& B)
 
     assert(A.mb() == B.mb());
     assert(A.nb() == B.nb());
+    // Quick return
+    if (A.mb() == 0 || A.nb() == 0)
+        return;
 
     const src_scalar_t* A00 = &A.at(0, 0);
     int64_t a_col_inc = A.colIncrement();
@@ -383,6 +388,8 @@ void copyRow(int64_t n,
 {
     copyRow(n, V, A, i_offs, j_offs);
 }
+
+} // namespace tile
 
 } // namespace slate
 

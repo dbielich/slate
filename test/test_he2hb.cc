@@ -43,7 +43,7 @@ void test_he2hb_work(Params& params, bool run)
 
     // mark non-standard output values
     params.time();
-    //params.gflops();
+    params.gflops();
 
     if (! run)
         return;
@@ -98,8 +98,9 @@ void test_he2hb_work(Params& params, bool run)
     Aref.insertLocalTiles();
     slate::copy(A, Aref);
 
-    // todo
+    // compute and save timing/performance
     //double gflop = lapack::Gflop<scalar_t>::he2hb(n, n);
+    double gflop = lapack::Gflop<scalar_t>::hetrd( n );
 
     if (trace) slate::trace::Trace::on();
     else slate::trace::Trace::off();
@@ -117,7 +118,7 @@ void test_he2hb_work(Params& params, bool run)
 
     // compute and save timing/performance
     params.time() = time;
-    //params.gflops() = gflop / time;
+    params.gflops() = gflop / time;
 
     print_matrix("A_factored", A, params);
     print_matrix("Tlocal",  T[0], params);
@@ -159,7 +160,7 @@ void test_he2hb_work(Params& params, bool run)
                     auto Bij = B(i, j);
                     // if i == j, Aij was Lower; set it to General for axpy.
                     Aij.uplo(slate::Uplo::General);
-                    axpy(-one, Aij, Bij);
+                    slate::tile::add( -one, Aij, Bij );
                 }
             }
         }

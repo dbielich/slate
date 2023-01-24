@@ -836,12 +836,15 @@ void BaseTrapezoidMatrix<scalar_t>::tileUpdateAllOrigin()
 ///
 /// @param[in] target
 ///     - if target = Devices, inserts tiles on appropriate GPU devices, or
-///     - if target = Host, inserts on tiles on CPU host.
+///     - if target = Host,    inserts tiles on CPU host.
 ///
 template <typename scalar_t>
 void BaseTrapezoidMatrix<scalar_t>::insertLocalTiles(Target origin)
 {
     bool on_devices = (origin == Target::Devices);
+    if (on_devices)
+        reserveDeviceWorkspace();
+
     int64_t mt = this->mt();
     for (int64_t j = 0; j < this->nt(); ++j) {
         int64_t istart = (this->uplo() == Uplo::Lower ? j : 0);
@@ -1157,7 +1160,8 @@ void BaseTrapezoidMatrix<scalar_t>::tileLayoutReset()
             #pragma omp task slate_omp_default_none \
                 firstprivate( layout ) shared( tiles_set_host )
             {
-                this->tileLayoutReset( tiles_set_host, HostNum, layout );
+                this->BaseMatrix<scalar_t>::tileLayoutReset(
+                    tiles_set_host, HostNum, layout );
             }
         }
         for (int d = 0; d < this->num_devices(); ++d) {
@@ -1166,7 +1170,8 @@ void BaseTrapezoidMatrix<scalar_t>::tileLayoutReset()
                 #pragma omp task slate_omp_default_none \
                     firstprivate( d, layout ) shared( tiles_set_dev )
                 {
-                    this->tileLayoutReset(tiles_set_dev[d], d, layout);
+                    this->BaseMatrix<scalar_t>::tileLayoutReset(
+                        tiles_set_dev[d], d, layout );
                 }
             }
         }

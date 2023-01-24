@@ -12,25 +12,32 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::getrf from internal::specialization::getrf
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel LU factorization.
 /// Generic implementation for any target.
 /// Panel and lookahead computed on host using Host OpenMP task.
-/// @ingroup gesv_specialization
+/// @ingroup gesv_impl
 ///
 template <Target target, typename scalar_t>
-void getrf(slate::internal::TargetType<target>,
-           Matrix<scalar_t>& A, Pivots& pivots,
-           blas::real_type<scalar_t> pivot_threshold,
-           int64_t ib, int max_panel_threads, int64_t lookahead)
+void getrf(
+    Matrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
-    // using real_t = blas::real_type<scalar_t>;
+    using real_t = blas::real_type<scalar_t>;
     using BcastList = typename Matrix<scalar_t>::BcastList;
+
+    const scalar_t one = 1.0;
+
+    // Options
+    real_t pivot_threshold
+        = get_option<double>( opts, Option::PivotThreshold, 1.0 );
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
+    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
+    int64_t max_panel_threads  = std::max( omp_get_max_threads()/2, 1 );
+    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads,
+                                             max_panel_threads );
 
     // Host can use Col/RowMajor for row swapping,
     // RowMajor is slightly more efficient.
@@ -85,7 +92,7 @@ void getrf(slate::internal::TargetType<target>,
             #pragma omp task depend(inout:column[k]) priority(priority_one)
             {
                 // factor A(k:mt-1, k)
-                internal::getrf<Target::HostTask>(
+                internal::getrf_panel<Target::HostTask>(
                     A.sub(k, A_mt-1, k, k), diag_len, ib, pivots.at(k),
                     pivot_threshold, max_panel_threads, priority_one, k);
 
@@ -126,8 +133,7 @@ void getrf(slate::internal::TargetType<target>,
                     // solve A(k, k) A(k, j) = A(k, j)
                     internal::trsm<target>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, j, j),
+                        one, std::move( Tkk ), A.sub(k, k, j, j),
                         priority_one, Layout::ColMajor, j-k+1);
 
                     // send A(k, j) across column A(k+1:mt-1, j)
@@ -136,9 +142,9 @@ void getrf(slate::internal::TargetType<target>,
 
                     // A(k+1:mt-1, j) -= A(k+1:mt-1, k) * A(k, j)
                     internal::gemm<target>(
-                        scalar_t(-1.0), A.sub(k+1, A_mt-1, k, k),
-                                        A.sub(k, k, j, j),
-                        scalar_t(1.0),  A.sub(k+1, A_mt-1, j, j),
+                        -one, A.sub(k+1, A_mt-1, k, k),
+                              A.sub(k, k, j, j),
+                        one,  A.sub(k+1, A_mt-1, j, j),
                         target_layout, priority_one, j-k+1);
                 }
             }
@@ -176,8 +182,8 @@ void getrf(slate::internal::TargetType<target>,
                     // todo: target
                     internal::trsm<target>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, k+1+lookahead, A_nt-1),
+                        one, std::move( Tkk ),
+                             A.sub(k, k, k+1+lookahead, A_nt-1),
                         priority_zero, Layout::ColMajor, queue_1);
 
                     // send A(k, kl+1:A_nt-1) across A(k+1:mt-1, kl+1:nt-1)
@@ -192,9 +198,9 @@ void getrf(slate::internal::TargetType<target>,
 
                     // A(k+1:mt-1, kl+1:nt-1) -= A(k+1:mt-1, k) * A(k, kl+1:nt-1)
                     internal::gemm<target>(
-                        scalar_t(-1.0), A.sub(k+1, A_mt-1, k, k),
-                                        A.sub(k, k, k+1+lookahead, A_nt-1),
-                        scalar_t(1.0),  A.sub(k+1, A_mt-1, k+1+lookahead, A_nt-1),
+                        -one, A.sub(k+1, A_mt-1, k, k),
+                              A.sub(k, k, k+1+lookahead, A_nt-1),
+                        one,  A.sub(k+1, A_mt-1, k+1+lookahead, A_nt-1),
                         target_layout, priority_zero, queue_1);
                 }
             }
@@ -224,31 +230,7 @@ void getrf(slate::internal::TargetType<target>,
     A.clearWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup gesv_specialization
-///
-template <Target target, typename scalar_t>
-void getrf(Matrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
-{
-    blas::real_type<scalar_t> pivot_threshold = get_option<double>( opts, Option::PivotThreshold, 1.0 );
-
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
-
-    int64_t max_panel_threads  = std::max(omp_get_max_threads()/2, 1);
-    max_panel_threads = get_option<int64_t>( opts, Option::MaxPanelThreads, max_panel_threads );
-
-    internal::specialization::getrf(internal::TargetType<target>(),
-                                    A, pivots,
-                                    pivot_threshold,
-                                    ib, max_panel_threads, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel LU factorization.
@@ -266,6 +248,10 @@ void getrf(Matrix<scalar_t>& A, Pivots& pivots,
 ///
 /// This is the right-looking Level 3 BLAS version of the algorithm.
 ///
+/// Complexity (in real):
+/// - $\approx m n^{2} - \frac{1}{3} n^{3}$ flops;
+/// - $\approx \frac{2}{3} n^{3}$ flops for $m = n$.
+/// .
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
 ///     One of float, double, std::complex<float>, std::complex<double>.
@@ -280,22 +266,34 @@ void getrf(Matrix<scalar_t>& A, Pivots& pivots,
 ///
 /// @param[in] opts
 ///     Additional options, as map of name = value pairs. Possible options:
+///
 ///     - Option::Lookahead:
 ///       Number of panels to overlap with matrix updates.
 ///       lookahead >= 0. Default 1.
+///
 ///     - Option::InnerBlocking:
 ///       Inner blocking to use for panel. Default 16.
+///
 ///     - Option::MaxPanelThreads:
 ///       Number of threads to use for panel. Default omp_get_max_threads()/2.
+///
 ///     - Option::Target:
 ///       Implementation to target. Possible values:
 ///       - HostTask:  OpenMP tasks on CPU host [default].
 ///       - HostNest:  nested OpenMP parallel for loop on CPU host.
 ///       - HostBatch: batched BLAS on CPU host.
 ///       - Devices:   batched BLAS on GPU device.
+///
 ///    - Option::PivotThreshold:
 ///      Strictness of the pivot selection.  Between 0 and 1 with 1 giving
 ///      partial pivoting and 0 giving no pivoting.  Default 1.
+///
+///    - Option::MethodLU:
+///      Algorithm for LU factorization.
+///       - MethodLU::PartialPiv: partial pivoting [default].
+///       - MethodLU::CALU: communication avoiding (tournament pivoting).
+///       - MethodLU::NoPiv: no pivoting.
+///         Note pivots vector is currently ignored for NoPiv.
 ///
 /// TODO: return value
 /// @retval 0 successful exit
@@ -307,25 +305,43 @@ void getrf(Matrix<scalar_t>& A, Pivots& pivots,
 /// @ingroup gesv_computational
 ///
 template <typename scalar_t>
-void getrf(Matrix<scalar_t>& A, Pivots& pivots,
-           Options const& opts)
+void getrf(
+    Matrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts )
 {
-    Target target = get_option( opts, Option::Target, Target::HostTask );
+    Method method = get_option( opts, Option::MethodLU, MethodLU::PartialPiv );
 
-    switch (target) {
-        case Target::Host:
-        case Target::HostTask:
-            getrf<Target::HostTask>(A, pivots, opts);
-            break;
-        case Target::HostNest:
-            getrf<Target::HostNest>(A, pivots, opts);
-            break;
-        case Target::HostBatch:
-            getrf<Target::HostBatch>(A, pivots, opts);
-            break;
-        case Target::Devices:
-            getrf<Target::Devices>(A, pivots, opts);
-            break;
+    if (method == MethodLU::CALU) {
+        getrf_tntpiv( A, pivots, opts );
+    }
+    else if (method == MethodLU::NoPiv) {
+        // todo: fill in pivots vector?
+        getrf_nopiv( A, opts );
+    }
+    else if (method == MethodLU::PartialPiv) {
+        Target target = get_option( opts, Option::Target, Target::HostTask );
+
+        switch (target) {
+            case Target::Host:
+            case Target::HostTask:
+                impl::getrf<Target::HostTask>( A, pivots, opts );
+                break;
+
+            case Target::HostNest:
+                impl::getrf<Target::HostNest>( A, pivots, opts );
+                break;
+
+            case Target::HostBatch:
+                impl::getrf<Target::HostBatch>( A, pivots, opts );
+                break;
+
+            case Target::Devices:
+                impl::getrf<Target::Devices>( A, pivots, opts );
+                break;
+        }
+    }
+    else {
+        throw Exception( "unknown value for MethodLU" );
     }
     // todo: return value for errors?
 }

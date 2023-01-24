@@ -12,10 +12,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::pbtrf from internal::specialization::pbtrf
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel band Cholesky factorization.
@@ -25,14 +22,21 @@ namespace specialization {
 /// Warning: ColMajor layout is assumed
 ///
 template <Target target, typename scalar_t>
-void pbtrf(slate::internal::TargetType<target>,
-           HermitianBandMatrix<scalar_t> A, int64_t lookahead)
+void pbtrf(
+    HermitianBandMatrix<scalar_t> A,
+    Options const& opts )
 {
     using real_t = blas::real_type<scalar_t>;
     using BcastList = typename HermitianBandMatrix<scalar_t>::BcastList;
 
+    const scalar_t one = 1.0;
+    const real_t r_one = 1.0;
+
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
 
     // if upper, change to lower
     if (A.uplo() == Uplo::Upper)
@@ -71,7 +75,7 @@ void pbtrf(slate::internal::TargetType<target>,
                 auto Tkk = TriangularMatrix< scalar_t >(Diag::NonUnit, Akk);
                 internal::trsm<Target::HostTask>(
                     Side::Right,
-                    scalar_t(1.0), conjTranspose(Tkk),
+                    one, conj_transpose( Tkk ),
                     A.sub(k+1, ij_end-1, k, k), 1);
             }
 
@@ -92,8 +96,8 @@ void pbtrf(slate::internal::TargetType<target>,
                              depend(inout:column[A_nt-1])
             {
                 internal::herk<Target::HostTask>(
-                    real_t(-1.0), A.sub(k+1+lookahead, ij_end-1, k, k),
-                    real_t( 1.0), A.sub(k+1+lookahead, ij_end-1));
+                    -r_one, A.sub(k+1+lookahead, ij_end-1, k, k),
+                    r_one,  A.sub(k+1+lookahead, ij_end-1) );
             }
         }
 
@@ -103,15 +107,15 @@ void pbtrf(slate::internal::TargetType<target>,
                              depend(inout:column[j])
             {
                 internal::herk<Target::HostTask>(
-                    real_t(-1.0), A.sub(j, j, k, k),
-                    real_t( 1.0), A.sub(j, j));
+                    -r_one, A.sub(j, j, k, k),
+                    r_one,  A.sub(j, j) );
 
                 if (j+1 <= A_nt-1) {
                     auto Ajk = A.sub(j, j, k, k);
                     internal::gemm<Target::HostTask>(
-                        scalar_t(-1.0), A.sub(j+1, ij_end-1, k, k),
-                                        conjTranspose(Ajk),
-                        scalar_t( 1.0), A.sub(j+1, ij_end-1, j, j), layout);
+                        -one, A.sub(j+1, ij_end-1, k, k),
+                              conj_transpose( Ajk ),
+                        one,  A.sub(j+1, ij_end-1, j, j), layout );
                 }
             }
         }
@@ -125,22 +129,7 @@ void pbtrf(slate::internal::TargetType<target>,
     // Debug::printTilesMaps(A);
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup pbsv_specialization
-///
-template <Target target, typename scalar_t>
-void pbtrf(HermitianBandMatrix<scalar_t>& A,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::pbtrf(internal::TargetType<target>(),
-                                    A, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel band Cholesky factorization.
@@ -200,24 +189,28 @@ void pbtrf(HermitianBandMatrix<scalar_t>& A,
 /// @ingroup pbsv_computational
 ///
 template <typename scalar_t>
-void pbtrf(HermitianBandMatrix<scalar_t>& A,
-           Options const& opts)
+void pbtrf(
+    HermitianBandMatrix<scalar_t>& A,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            pbtrf<Target::HostTask>(A, opts);
+            impl::pbtrf<Target::HostTask>( A, opts );
             break;
+
         case Target::HostNest:
-            pbtrf<Target::HostNest>(A, opts);
+            impl::pbtrf<Target::HostNest>( A, opts );
             break;
+
         case Target::HostBatch:
-            pbtrf<Target::HostBatch>(A, opts);
+            impl::pbtrf<Target::HostBatch>( A, opts );
             break;
+
         case Target::Devices:
-            pbtrf<Target::Devices>(A, opts);
+            impl::pbtrf<Target::Devices>( A, opts );
             break;
     }
     // todo: return value for errors?

@@ -9,12 +9,6 @@
 #include "internal/internal.hh"
 #include "internal/internal_batch.hh"
 
-#ifdef SLATE_WITH_MKL
-    #include <mkl_cblas.h>
-#else
-    #include <cblas.h>
-#endif
-
 namespace slate {
 namespace internal {
 
@@ -80,6 +74,12 @@ void gemm(internal::TargetType<Target::HostTask>,
     assert(A.mt() == C.mt());
     assert(B.nt() == C.nt());
 
+    TileReleaseStrategy tile_release_strategy = get_option(
+            opts, Option::TileReleaseStrategy, TileReleaseStrategy::All );
+
+    bool call_tile_tick = tile_release_strategy == TileReleaseStrategy::Internal
+                          || tile_release_strategy == TileReleaseStrategy::All;
+
     int err = 0;
     std::string err_msg;
     std::set<ij_tuple> A_tiles_set, B_tiles_set;
@@ -100,16 +100,19 @@ void gemm(internal::TargetType<Target::HostTask>,
             if (C.tileIsLocal(i, j)) {
                 #pragma omp task slate_omp_default_none \
                     shared( A, B, C, err, err_msg ) \
-                    firstprivate(i, j, layout, alpha, beta) priority(priority)
+                    firstprivate(i, j, layout, alpha, beta, call_tile_tick) \
+                    priority(priority)
                 {
                     try {
                         C.tileGetForWriting(i, j, LayoutConvert(layout));
-                        gemm(alpha, A(i, 0),
-                                    B(0, j),
-                             beta,  C(i, j));
-                        // todo: shouldn't tileRelease()?
-                        A.tileTick(i, 0);
-                        B.tileTick(0, j);
+                        tile::gemm(
+                            alpha, A(i, 0), B(0, j),
+                            beta,  C(i, j) );
+                        if (call_tile_tick) {
+                            // todo: shouldn't tileRelease()?
+                            A.tileTick(i, 0);
+                            B.tileTick(0, j);
+                        }
                     }
                     catch (std::exception& e) {
                         err = __LINE__;
@@ -158,9 +161,9 @@ void gemm(internal::TargetType<Target::HostNest>,
                     A.tileGetForReading(i, 0, LayoutConvert(layout));
                     B.tileGetForReading(0, j, LayoutConvert(layout));
                     C.tileGetForWriting(i, j, LayoutConvert(layout));
-                    gemm(alpha, A(i, 0),
-                                B(0, j),
-                         beta,  C(i, j));
+                    tile::gemm(
+                        alpha, A(i, 0), B(0, j),
+                        beta,  C(i, j) );
                     // todo: shouldn't tileRelease()?
                     A.tileTick(i, 0);
                     B.tileTick(0, j);
@@ -193,6 +196,7 @@ void gemm(internal::TargetType<Target::HostBatch>,
           Layout layout, int priority, int64_t queue_index,
           Options const& opts )
 {
+#ifdef BLAS_HAVE_MKL
     using blas::conj;
     using std::swap;
     using ij_tuple = typename BaseMatrix<scalar_t>::ij_tuple;
@@ -324,32 +328,28 @@ void gemm(internal::TargetType<Target::HostBatch>,
 
         {
             trace::Block trace_block("cblas_gemm_batch");
-            #ifdef SLATE_WITH_MKL
-                // mkl_set_num_threads_local(...);
-                if (layout == Layout::ColMajor) {
-                    cblas_gemm_batch(
-                        CblasColMajor,
-                        opA_array.data(), opB_array.data(),
-                        m_array.data(), n_array.data(), k_array.data(),
-                        alpha_array.data(), a_array.data(), lda_array.data(),
-                                            b_array.data(), ldb_array.data(),
-                        beta_array.data(),  c_array.data(), ldc_array.data(),
-                        batch_count, group_size.data());
-                }
-                else {
-                    cblas_gemm_batch(
-                        CblasColMajor,
-                        opB_array.data(), opA_array.data(),
-                        n_array.data(), m_array.data(), k_array.data(),
-                        alpha_array.data(), b_array.data(), ldb_array.data(),
-                                            a_array.data(), lda_array.data(),
-                        beta_array.data(),  c_array.data(), ldc_array.data(),
-                        batch_count, group_size.data());
-                }
-                // mkl_set_num_threads_local(1);
-            #else
-                slate_not_implemented( "HostBatch requires Intel MKL" );
-            #endif
+            // mkl_set_num_threads_local(...);
+            if (layout == Layout::ColMajor) {
+                cblas_gemm_batch(
+                    CblasColMajor,
+                    opA_array.data(), opB_array.data(),
+                    m_array.data(), n_array.data(), k_array.data(),
+                    alpha_array.data(), a_array.data(), lda_array.data(),
+                                        b_array.data(), ldb_array.data(),
+                    beta_array.data(),  c_array.data(), ldc_array.data(),
+                    batch_count, group_size.data());
+            }
+            else {
+                cblas_gemm_batch(
+                    CblasColMajor,
+                    opB_array.data(), opA_array.data(),
+                    n_array.data(), m_array.data(), k_array.data(),
+                    alpha_array.data(), b_array.data(), ldb_array.data(),
+                                        a_array.data(), lda_array.data(),
+                    beta_array.data(),  c_array.data(), ldc_array.data(),
+                    batch_count, group_size.data());
+            }
+            // mkl_set_num_threads_local(1);
         }
 
         for (int64_t i = 0; i < C.mt(); ++i) {
@@ -362,6 +362,9 @@ void gemm(internal::TargetType<Target::HostBatch>,
             }
         }
     }
+#else
+    slate_not_implemented( "HostBatch requires Intel MKL" );
+#endif
 }
 
 //------------------------------------------------------------------------------

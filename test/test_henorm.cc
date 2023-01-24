@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <utility>
 
-#define SLATE_HAVE_SCALAPACK
 //------------------------------------------------------------------------------
 template<typename scalar_t>
 void test_henorm_work(Params& params, bool run)
@@ -138,12 +137,6 @@ void test_henorm_work(Params& params, bool run)
         if (check || ref) {
             // comparison with reference routine from ScaLAPACK
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             // allocate work space
             int lcm = scalapack_ilcm(&p, &q);
             int ldw = nb*slate::ceildiv(int(slate::ceildiv(nlocA, nb)), (lcm / p));
@@ -187,8 +180,6 @@ void test_henorm_work(Params& params, bool run)
 
             params.ref_time() = time;
             params.error() = error;
-
-            slate_set_num_blas_threads(saved_num_threads);
 
             // Allow for difference
             params.okay() = (params.error() <= tol);
@@ -317,11 +308,14 @@ void test_henorm_work(Params& params, bool run)
         }
         Cblacs_gridexit(ictxt);
         //Cblacs_exit(1) does not handle re-entering
-    #else
-        SLATE_UNUSED(A_norm);
-        SLATE_UNUSED(check);
-        SLATE_UNUSED(ref);
-        SLATE_UNUSED(extended);
+    #else  // not SLATE_HAVE_SCALAPACK
+        SLATE_UNUSED( A_norm );
+        SLATE_UNUSED( check );
+        SLATE_UNUSED( ref );
+        SLATE_UNUSED( extended );
+        SLATE_UNUSED( verbose );
+        if ((check || ref) && mpi_rank == 0)
+            printf( "ScaLAPACK not available\n" );
     #endif
 }
 

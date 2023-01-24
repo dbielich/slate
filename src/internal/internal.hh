@@ -10,13 +10,6 @@
 #define SLATE_INTERNAL_HH
 
 #include "slate/types.hh"
-
-#ifdef SLATE_WITH_MKL
-    #include <mkl_cblas.h>
-#else
-    #include <cblas.h>
-#endif
-
 #include "slate/Matrix.hh"
 #include "slate/HermitianMatrix.hh"
 #include "slate/HermitianBandMatrix.hh"
@@ -24,6 +17,7 @@
 #include "slate/TriangularMatrix.hh"
 #include "slate/TriangularBandMatrix.hh"
 #include "slate/BandMatrix.hh"
+#include "lapack.hh"
 
 namespace slate {
 
@@ -66,18 +60,41 @@ public:
           rank_(rank)
     {}
 
+    AuxPivot(int64_t tile_index,
+             int64_t element_offset,
+             int64_t local_tile_index,
+             int64_t local_offset,
+             scalar_t value,
+             int rank)
+        : tile_index_(tile_index),
+          element_offset_(element_offset),
+          local_tile_index_(local_tile_index),
+          local_offset_(local_offset),
+          value_(value),
+          rank_(rank)
+    {}
+
     int64_t tileIndex() { return tile_index_; }
     int64_t elementOffset() { return element_offset_; }
     int64_t localTileIndex() { return local_tile_index_; }
+    int64_t localOffset() { return local_offset_; }
     scalar_t value() { return value_; }
     int rank() { return rank_; }
+
+    void set_tileIndex(int64_t i) { tile_index_ = i; }
+    void set_elementOffset(int64_t i) { element_offset_ = i; }
+    void set_localTileIndex(int64_t i) { local_tile_index_ = i; }
+    void set_localOffset(int64_t i) { local_offset_ = i; }
+    void set_value(scalar_t v) { value_ = v; }
+    void set_rank(int r) { rank_ = r; }
 
 private:
     int64_t tile_index_;       ///< tile index in the panel submatrix
     int64_t element_offset_;   ///< pivot offset in the tile
     int64_t local_tile_index_; ///< tile index in the local list
+    int64_t local_offset_;     ///< pivot offset in the local list
     scalar_t value_;           ///< value of the pivot element
-    int rank_;                 ///< rank of the pivot owner
+    int rank_;                 ///< MPI rank of the pivot owner
 };
 
 //------------------------------------------------------------------------------
@@ -114,6 +131,15 @@ template <Target target=Target::HostTask, typename scalar_t>
 void scale(blas::real_type<scalar_t> numer, blas::real_type<scalar_t> denom,
            BaseTrapezoidMatrix<scalar_t>&& A,
            int priority=0, int queue_index=0);
+
+//-----------------------------------------
+// scale_row_col
+template <Target target=Target::HostTask, typename scalar_t, typename scalar_t2>
+void scale_row_col(
+    Equed equed,
+    std::vector< scalar_t2 > const& R,
+    std::vector< scalar_t2 > const& C,
+    Matrix<scalar_t>&& A );
 
 //-----------------------------------------
 // set()
@@ -157,7 +183,8 @@ template <Target target=Target::HostTask, typename scalar_t>
 void gemmA(scalar_t alpha, Matrix<scalar_t>&& A,
                            Matrix<scalar_t>&& B,
            scalar_t beta,  Matrix<scalar_t>&& C,
-           Layout layout, int priority=0);
+           Layout layout, int priority=0, int64_t queue_index=0,
+           Options const& opts = Options());
 
 //-----------------------------------------
 // hemm()
@@ -166,7 +193,8 @@ void hemm(Side side,
           scalar_t alpha, HermitianMatrix<scalar_t>&& A,
                           Matrix<scalar_t>&& B,
           scalar_t beta,  Matrix<scalar_t>&& C,
-          int priority=0);
+          int priority=0,
+          Options const& opts = Options());
 
 // forward real-symmetric matrices to hemm;
 // disabled for complex
@@ -176,10 +204,11 @@ void hemm(Side side,
                           Matrix<scalar_t>&& B,
           scalar_t beta,  Matrix<scalar_t>&& C,
           int priority=0,
+          Options const& opts = Options(),
           enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     hemm<target>(side, alpha, std::move(A),
-                 beta, HermitianMatrix<scalar_t>(C), priority);
+                 beta, HermitianMatrix<scalar_t>(C), priority, opts);
 }
 
 //-----------------------------------------
@@ -219,7 +248,8 @@ template <Target target=Target::HostTask, typename scalar_t>
 void her2k(scalar_t alpha,                 Matrix<scalar_t>&& A,
                                            Matrix<scalar_t>&& B,
            blas::real_type<scalar_t> beta, HermitianMatrix<scalar_t>&& C,
-           int priority=0, int queue_index=0, Layout layout=Layout::ColMajor);
+           int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+           Options const& opts = Options());
 
 // forward real-symmetric matrices to her2k;
 // disabled for complex
@@ -228,11 +258,12 @@ void her2k(scalar_t alpha,                  Matrix<scalar_t>&& A,
                                             Matrix<scalar_t>&& B,
            blas::real_type<scalar_t> beta,  SymmetricMatrix<scalar_t>&& C,
            int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+           Options const& opts = Options(),
            enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     her2k<target>(alpha, std::move(A),
                   beta, HermitianMatrix<scalar_t>(C),
-                  priority, queue_index, layout);
+                  priority, queue_index, layout, opts);
 }
 
 //-----------------------------------------
@@ -242,7 +273,8 @@ void symm(Side side,
           scalar_t alpha, SymmetricMatrix<scalar_t>&& A,
                           Matrix<scalar_t>&& B,
           scalar_t beta,  Matrix<scalar_t>&& C,
-          int priority=0);
+          int priority=0,
+          Options const& opts = Options());
 
 // forward real-Hermitian matrices to symm;
 // disabled for complex
@@ -252,10 +284,11 @@ void symm(Side side,
                           Matrix<scalar_t>&& B,
           scalar_t beta,  Matrix<scalar_t>&& C,
           int priority=0,
+          Options const& opts = Options(),
           enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     symm<target>(side, alpha, std::move(A),
-                 beta, SymmetricMatrix<scalar_t>(C), priority);
+                 beta, SymmetricMatrix<scalar_t>(C), priority, opts);
 }
 
 //-----------------------------------------
@@ -263,7 +296,8 @@ void symm(Side side,
 template <Target target=Target::HostTask, typename scalar_t>
 void syrk(scalar_t alpha, Matrix<scalar_t>&& A,
           scalar_t beta,  SymmetricMatrix<scalar_t>&& C,
-          int priority=0, int queue_index=0, Layout layout=Layout::ColMajor);
+          int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+          Options const& opts = Options());
 
 // forward real-Hermitian matrices to syrk;
 // disabled for complex
@@ -271,6 +305,7 @@ template <Target target=Target::HostTask, typename scalar_t>
 void syrk(scalar_t alpha, Matrix<scalar_t>&& A,
           scalar_t beta,  HermitianMatrix<scalar_t>&& C,
           int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+          Options const& opts = Options(),
           enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     syrk<target>(alpha, std::move(A),
@@ -284,7 +319,8 @@ template <Target target=Target::HostTask, typename scalar_t>
 void syr2k(scalar_t alpha, Matrix<scalar_t>&& A,
                            Matrix<scalar_t>&& B,
            scalar_t beta,  SymmetricMatrix<scalar_t>&& C,
-           int priority=0, int queue_index=0, Layout layout=Layout::ColMajor);
+           int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+           Options const& opts = Options());
 
 // forward real-Hermitian matrices to syr2k;
 // disabled for complex
@@ -293,11 +329,12 @@ void syr2k(scalar_t alpha, Matrix<scalar_t>&& A,
                            Matrix<scalar_t>&& B,
            scalar_t beta,  HermitianMatrix<scalar_t>&& C,
            int priority=0, int queue_index=0, Layout layout=Layout::ColMajor,
+           Options const& opts = Options(),
            enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     syr2k<target>(alpha, std::move(A), std::move(B),
                   beta, SymmetricMatrix<scalar_t>(C),
-                  priority, queue_index, layout);
+                  priority, queue_index, layout, opts);
 }
 
 //-----------------------------------------
@@ -443,10 +480,11 @@ void norm(Norm in_norm, NormScope scope, HermitianBandMatrix<scalar_t>&& A,
 //       Probably best to do A, pivot, ib, diag_let, ib, ...
 //       Possibly compute diag_len in internal.
 template <Target target=Target::HostTask, typename scalar_t>
-void getrf(Matrix<scalar_t>&& A, int64_t diag_len, int64_t ib,
-           std::vector<Pivot>& pivot,
-           blas::real_type<scalar_t> remote_pivot_threshold,
-           int max_panel_threads, int priority=0, int tag=0);
+void getrf_panel(
+    Matrix<scalar_t>&& A, int64_t diag_len, int64_t ib,
+    std::vector<Pivot>& pivot,
+    blas::real_type<scalar_t> remote_pivot_threshold,
+    int max_panel_threads, int priority=0, int tag=0);
 
 //-----------------------------------------
 // getrf_nopiv()
@@ -455,10 +493,74 @@ void getrf_nopiv(Matrix<scalar_t>&& A,
                  int64_t ib, int priority=0);
 
 //-----------------------------------------
+// getrf_tntpiv()
+template <Target target=Target::HostTask, typename scalar_t>
+void getrf_tntpiv_panel(
+    Matrix<scalar_t>&& A, Matrix<scalar_t>&& Awork,
+    std::vector< scalar_t* > dwork_array,
+    size_t work_size,
+    int64_t diag_len, int64_t ib,
+    std::vector<Pivot>& pivot,
+    int max_panel_threads, int priority=0);
+
+//-----------------------------------------
 // geqrf()
 template <Target target=Target::HostTask, typename scalar_t>
-void geqrf(Matrix<scalar_t>&& A, Matrix<scalar_t>&& T, int64_t ib,
-           int max_panel_threads, int priority=0);
+void geqrf(Matrix<scalar_t>&& A, Matrix<scalar_t>&& T,
+           std::vector< scalar_t* > dwork_array, size_t work_size,
+           int64_t ib, int max_panel_threads, int priority=0);
+
+//-----------------------------------------
+// For backwards compatibility of
+// ge2tb, gelqf, he2hb
+// geqrf()
+template <Target target=Target::HostTask, typename scalar_t>
+void geqrf(Matrix<scalar_t>&& A, Matrix<scalar_t>&& T,
+           int64_t ib, int max_panel_threads, int priority=0)
+{
+    std::vector< scalar_t* > dwork_array(1);
+    dwork_array[0] = nullptr;
+    geqrf( std::move(A), std::move(T),
+           dwork_array, 0, ib, max_panel_threads, priority);
+}
+
+//-----------------------------------------
+// he2hb_hemm()
+template <Target target=Target::HostTask, typename scalar_t>
+void he2hb_hemm(HermitianMatrix<scalar_t>&& A,
+            Matrix<scalar_t>&& B,
+            Matrix<scalar_t>&& C,
+            std::vector<int64_t>& panel_rank_rows,
+            int priority=0, int64_t queue_index=0);
+
+//-----------------------------------------
+// he2hb_trmm()
+template <Target target=Target::HostTask, typename scalar_t>
+void he2hb_trmm(HermitianMatrix<scalar_t>&& AH,
+            Matrix<scalar_t>&& A,
+            Matrix<scalar_t>&& B,
+            std::vector<int64_t>& panel_rank_rows,
+            int priority=0, int64_t queue_index=0);
+
+
+//-----------------------------------------
+// he2hb_gemm()
+template <Target target=Target::HostTask, typename scalar_t>
+void he2hb_gemm(scalar_t alpha, Matrix<scalar_t>&& A,
+                                Matrix<scalar_t>&& B,
+                scalar_t beta,  Matrix<scalar_t>&& T,
+                int panel_rank,
+                int priority=0, int64_t queue_index=0);
+
+//-----------------------------------------
+// he2hb_her2k_offdiag_ranks()
+template <Target target=Target::HostTask, typename scalar_t>
+void he2hb_her2k_offdiag_ranks(
+        scalar_t alpha, Matrix<scalar_t>&& A,
+                        Matrix<scalar_t>&& B,
+        scalar_t beta,  HermitianMatrix<scalar_t>&& C,
+        std::vector<int64_t>& panel_rank_rows,
+        int priority=0, int64_t queue_index=0);
 
 //-----------------------------------------
 // ttqrt()
@@ -526,13 +628,15 @@ void unmtr_hb2st(Side side, Op op,
 // potrf()
 template <Target target=Target::HostTask, typename scalar_t>
 void potrf(HermitianMatrix<scalar_t>&& A,
-           int priority=0);
+           int priority=0, int64_t queue_index=0,
+           lapack::device_info_int* device_info=nullptr);
 
 // forward real-symmetric matrices to potrf;
 // disabled for complex
 template <Target target=Target::HostTask, typename scalar_t>
 void potrf(SymmetricMatrix<scalar_t>&& A,
-           int priority=0,
+           int priority=0, int64_t queue_index=0,
+           lapack::device_info_int* device_info=nullptr,
            enable_if_t< ! is_complex<scalar_t>::value >* = nullptr)
 {
     potrf<target>(SymmetricMatrix<scalar_t>(A), priority);
@@ -543,6 +647,18 @@ void potrf(SymmetricMatrix<scalar_t>&& A,
 template <Target target=Target::HostTask, typename scalar_t>
 void hegst(int64_t itype, HermitianMatrix<scalar_t>&& A,
                           HermitianMatrix<scalar_t>&& B);
+
+//------------------------------------------------------------------------------
+// Norm 1 estimate
+template <typename scalar_t>
+void norm1est(
+    Matrix<scalar_t>& A,
+    Matrix<scalar_t>& V,
+    Matrix<int64_t>& S,
+    blas::real_type<scalar_t>* one_normest,
+    int* kase,
+    std::vector<int64_t>& isave,
+    Options const& opts = Options());
 
 } // namespace internal
 } // namespace slate

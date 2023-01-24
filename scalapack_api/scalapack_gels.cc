@@ -101,16 +101,12 @@ void slate_pgels(const char* transstr, int m, int n, int nrhs, scalar_t* a, int 
         return;
     }
 
-    // make blas single threaded
-    // todo: does this set the omp num threads correctly
-    int saved_num_blas_threads = slate_set_num_blas_threads(1);
-
     blas::Op trans = blas::char2op(transstr[0]);
     static slate::Target target = slate_scalapack_set_target();
     static int verbose = slate_scalapack_set_verbose();
     static int64_t panel_threads = slate_scalapack_set_panelthreads();
     static int64_t inner_blocking = slate_scalapack_set_ib();
-    int64_t lookahead = 1;
+    static int64_t lookahead = slate_scalapack_set_lookahead();
     slate::GridOrder grid_order = slate_scalapack_blacs_grid_order();
 
     // A is m-by-n, BX is max(m, n)-by-nrhs.
@@ -141,16 +137,12 @@ void slate_pgels(const char* transstr, int m, int n, int nrhs, scalar_t* a, int 
     if (verbose && myprow == 0 && mypcol == 0)
         logprintf("%s\n", "gels");
 
-    slate::TriangularFactors<scalar_t> T;
-
-    slate::gels(opA, T, B, {
+    slate::gels(opA, B, {
         {slate::Option::Lookahead, lookahead},
         {slate::Option::Target, target},
         {slate::Option::MaxPanelThreads, panel_threads},
         {slate::Option::InnerBlocking, inner_blocking}
     });
-
-    slate_set_num_blas_threads(saved_num_blas_threads);
 
     // todo: extract the real info
     *info = 0;

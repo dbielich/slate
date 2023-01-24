@@ -18,11 +18,85 @@ namespace device {
 template <>
 void geadd(
     int64_t m, int64_t n,
-    std::complex<float> alpha, std::complex<float>** Aarray, int64_t lda,
-    std::complex<float> beta, std::complex<float>** Barray, int64_t ldb,
+    std::complex<float> const& alpha, std::complex<float>* A, int64_t lda,
+    std::complex<float> const& beta, std::complex<float>* B, int64_t ldb,
+    blas::Queue &queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    geadd(m, n,
+          make_cuFloatComplex(alpha.real(), alpha.imag()),
+          (cuFloatComplex*) A, lda,
+          make_cuFloatComplex(beta.real(), beta.imag()),
+          (cuFloatComplex*) B, ldb,
+          queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    geadd(m, n,
+          make_hipFloatComplex(alpha.real(), alpha.imag()),
+          (hipFloatComplex*) A, lda,
+          make_hipFloatComplex(beta.real(), beta.imag()),
+          (hipFloatComplex*) B, ldb,
+          queue);
+#endif
+}
+
+template <>
+void geadd(
+    int64_t m, int64_t n,
+    std::complex<double> const& alpha, std::complex<double>* A, int64_t lda,
+    std::complex<double> const& beta, std::complex<double>* B, int64_t ldb,
+    blas::Queue &queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    geadd(m, n,
+          make_cuDoubleComplex(alpha.real(), alpha.imag()),
+          (cuDoubleComplex*) A, lda,
+          make_cuDoubleComplex(beta.real(), beta.imag()),
+          (cuDoubleComplex*) B, ldb,
+          queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    geadd(m, n,
+          make_hipDoubleComplex(alpha.real(), alpha.imag()),
+          (hipDoubleComplex*) A, lda,
+          make_hipDoubleComplex(beta.real(), beta.imag()),
+          (hipDoubleComplex*) B, ldb,
+          queue);
+#endif
+}
+
+#if ! defined( SLATE_HAVE_DEVICE )
+// Specializations to allow compilation without CUDA or HIP.
+template <>
+void geadd(
+    int64_t m, int64_t n,
+    double const& alpha, double* A, int64_t lda,
+    double const& beta, double* B, int64_t ldb,
+    blas::Queue &queue)
+{
+}
+
+template <>
+void geadd(
+    int64_t m, int64_t n,
+    float const& alpha, float* A, int64_t lda,
+    float const& beta, float* B, int64_t ldb,
+    blas::Queue &queue)
+{
+}
+#endif // not SLATE_HAVE_DEVICE
+
+//==============================================================================
+namespace batch {
+
+template <>
+void geadd(
+    int64_t m, int64_t n,
+    std::complex<float> const& alpha, std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const& beta, std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     geadd(m, n,
           make_cuFloatComplex(alpha.real(), alpha.imag()),
           (cuFloatComplex**) Aarray, lda,
@@ -30,7 +104,7 @@ void geadd(
           (cuFloatComplex**) Barray, ldb,
           batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     geadd(m, n,
           make_hipFloatComplex(alpha.real(), alpha.imag()),
           (hipFloatComplex**) Aarray, lda,
@@ -43,11 +117,11 @@ void geadd(
 template <>
 void geadd(
     int64_t m, int64_t n,
-    std::complex<double> alpha, std::complex<double>** Aarray, int64_t lda,
-    std::complex<double> beta, std::complex<double>** Barray, int64_t ldb,
+    std::complex<double> const& alpha, std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const& beta, std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     geadd(m, n,
           make_cuDoubleComplex(alpha.real(), alpha.imag()),
           (cuDoubleComplex**) Aarray, lda,
@@ -55,7 +129,7 @@ void geadd(
           (cuDoubleComplex**) Barray, ldb,
           batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     geadd(m, n,
           make_hipDoubleComplex(alpha.real(), alpha.imag()),
           (hipDoubleComplex**) Aarray, lda,
@@ -65,13 +139,13 @@ void geadd(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void geadd(
     int64_t m, int64_t n,
-    double alpha, double** Aarray, int64_t lda,
-    double beta, double** Barray, int64_t ldb,
+    double const& alpha, double** Aarray, int64_t lda,
+    double const& beta, double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
@@ -79,15 +153,17 @@ void geadd(
 template <>
 void geadd(
     int64_t m, int64_t n,
-    float alpha, float** Aarray, int64_t lda,
-    float beta, float** Barray, int64_t ldb,
+    float const& alpha, float** Aarray, int64_t lda,
+    float const& beta, float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
+} // namespace batch
 } // namespace device
 
+//==============================================================================
 namespace internal {
 
 //------------------------------------------------------------------------------
@@ -138,8 +214,9 @@ void add(internal::TargetType<Target::HostTask>,
                 {
                     A.tileGetForReading(i, j, LayoutConvert::None);
                     B.tileGetForWriting(i, j, LayoutConvert::None);
-                    axpby(alpha, A(i, j),
-                          beta,  B(i, j));
+                    tile::add(
+                        alpha, A(i, j),
+                        beta,  B(i, j) );
                     A.tileTick(i, j);
                 }
             }
@@ -185,6 +262,8 @@ void add(internal::TargetType<Target::Devices>,
 {
     using ij_tuple = typename BaseMatrix<scalar_t>::ij_tuple;
 
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[4][2] = {
         { 0,        B.mt()-1 },
         { B.mt()-1, B.mt()   },
@@ -265,7 +344,6 @@ void add(internal::TargetType<Target::Devices>,
             scalar_t** b_array_dev = a_array_dev + batch_size;
 
             blas::Queue* queue = B.compute_queue(device, queue_index);
-            blas::set_device( queue->device() );
 
             blas::device_memcpy<scalar_t*>(a_array_dev, a_array_host,
                                 batch_count*2,
@@ -274,7 +352,7 @@ void add(internal::TargetType<Target::Devices>,
 
             for (int q = 0; q < 4; ++q) {
                 if (group_count[q] > 0) {
-                    device::geadd(mb[q], nb[q],
+                    device::batch::geadd(mb[q], nb[q],
                                   alpha, a_array_dev, lda[q],
                                   beta,  b_array_dev, ldb[q],
                                   group_count[q], *queue);

@@ -125,6 +125,11 @@ void generate_sigma(
 
     // locals
     int64_t min_mn = std::min( A.m(), A.n() );
+
+    // Ensure Sigma is allocated
+    if (Sigma.size() == 0) {
+        Sigma.resize(min_mn);
+    }
     assert( min_mn == int64_t(Sigma.size()) );
 
     switch (dist) {
@@ -389,7 +394,7 @@ void generate_svd(
                 for (int64_t k = 0; k < Tmpij.nb(); ++k) {
                     lapack::larnv(idist_randn, tile_iseed, Tmpij.mb(), &data[k*ldt]);
                 }
-                gecopy(Tmp(i, j), U(i, j));
+                slate::tile::gecopy( Tmp(i, j), U(i, j) );
                 Tmp.tileErase(i, j);
             }
         }
@@ -407,13 +412,14 @@ void generate_svd(
     slate::unmqr( slate::Side::Left, slate::Op::NoTrans, U, T, A);
 
     // random V, n-by-min_mn (stored column-wise in U)
-    auto V = U.sub(0, nt-1, 0, nt-1);
+    auto V = U.slice(0, n-1, 0, n-1);
+    auto Tmp_V = Tmp.slice(0, n-1, 0, n-1);
     #pragma omp parallel for collapse(2)
     for (int64_t j = 0; j < min_mt_nt; ++j) {
         for (int64_t i = 0; i < nt; ++i) {
             if (V.tileIsLocal(i, j)) {
-                Tmp.tileInsert(i, j);
-                auto Tmpij = Tmp(i, j);
+                Tmp_V.tileInsert(i, j);
+                auto Tmpij = Tmp_V(i, j);
                 scalar_t* data = Tmpij.data();
                 int64_t ldt = Tmpij.stride();
 
@@ -426,8 +432,8 @@ void generate_svd(
                 for (int64_t k = 0; k < Tmpij.nb(); ++k) {
                     lapack::larnv(idist_randn, tile_iseed, Tmpij.mb(), &data[k*ldt]);
                 }
-                gecopy(Tmp(i, j), V(i, j));
-                Tmp.tileErase(i, j);
+                slate::tile::gecopy( Tmp_V(i, j), V(i, j) );
+                Tmp_V.tileErase(i, j);
             }
         }
     }
@@ -534,7 +540,7 @@ void generate_heev(
                 for (int64_t k = 0; k < Tmpij.nb(); ++k) {
                     lapack::larnv(idist_rand, tile_iseed, Tmpij.mb(), &data[k*ldt]);
                 }
-                gecopy(Tmp(i, j), U(i, j));
+                slate::tile::gecopy( Tmp(i, j), U(i, j) );
                 Tmp.tileErase(i, j);
             }
         }
@@ -1196,7 +1202,9 @@ void generate_matrix(
             set(one, one, A);
             lapack::laset( lapack::MatrixType::General, Sigma.size(), 1,
                 d_zero, d_one, Sigma.data(), Sigma.size() );
-            Sigma[0] = sqrt(m*n);
+            if (Sigma.size() >= 1) {
+                Sigma[0] = sqrt(m*n);
+            }
             break;
 
         case TestMatrixType::identity:
@@ -1518,7 +1526,7 @@ void generate_matrix(
                         // Scale the matrix
                         if (sigma_max != 1) {
                             scalar_t s = sigma_max;
-                            scale(s, Aij);
+                            tile::scale( s, Aij );
                         }
                     }
                 }
@@ -1608,6 +1616,15 @@ void generate_matrix(
             set(zero, zero, A);
             lapack::laset( lapack::MatrixType::General, Sigma.size(), 1,
                 d_zero, d_zero, Sigma.data(), Sigma.size() );
+            break;
+
+        case TestMatrixType::one:
+            set(one, one, A);
+            lapack::laset( lapack::MatrixType::General, Sigma.size(), 1,
+                d_zero, d_one, Sigma.data(), Sigma.size() );
+            if (Sigma.size() >= 1) {
+                Sigma[0] = n;
+            }
             break;
 
         case TestMatrixType::identity:
@@ -1718,7 +1735,7 @@ void generate_matrix(
                             // Scale the matrix
                             if (sigma_max != 1) {
                                 scalar_t s = sigma_max;
-                                scale(s, Aij);
+                                tile::scale( s, Aij );
                             }
                         }
                     }
@@ -1767,7 +1784,7 @@ void generate_matrix(
                             // Scale the matrix
                             if (sigma_max != 1) {
                                 scalar_t s = sigma_max;
-                                scale(s, Aij);
+                                tile::scale( s, Aij );
                             }
                         }
                     }
@@ -1800,7 +1817,7 @@ void generate_matrix(
 }
 
 // -----------------------------------------------------------------------------
-/// Generates an m-by-n Hertitian-storage test matrix.
+/// Generates an m-by-n Hermitian-storage test matrix.
 /// Handles Hermitian matrices.
 /// Diagonal elements of a Hermitian matrix must be real;
 /// their imaginary part must be 0.

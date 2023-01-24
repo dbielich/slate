@@ -302,7 +302,7 @@ void HermitianBandMatrix<scalar_t>::gatherAll(std::set<int>& rank_set, int tag, 
             // Send across MPI ranks.
             // Previous used MPI bcast: tileBcastToSet(i, j, rank_set);
             // Currently uses 2D hypercube p2p send.
-            this->tileBcastToSet(i, j, rank_set, 2, tag, layout);
+            this->tileBcastToSet(i, j, rank_set, 2, tag, layout, Target::HostTask);
         }
     }
 }
@@ -342,7 +342,7 @@ void HermitianBandMatrix<scalar_t>::he2hbGather(HermitianMatrix<scalar_t>& A)
                         auto Aij = A(i, j);
                         auto Bij = this->at(i, j);
                         if (Aij.data() != Bij.data() ) {
-                            gecopy(A(i, j), Bij );
+                            tile::gecopy( A(i, j), Bij );
                         }
                     }
                 }

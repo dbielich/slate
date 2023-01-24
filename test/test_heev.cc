@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <limits>
 #include <utility>
-#define SLATE_HAVE_SCALAPACK
 
 //------------------------------------------------------------------------------
 template <typename scalar_t>
@@ -272,12 +271,6 @@ void test_heev_work(Params& params, bool run)
             scalapack_descinit(Z_desc, n, n, nb, nb, 0, 0, ictxt, mlocZ, &info);
             slate_assert(info == 0);
 
-            // set num threads appropriately for parallel BLAS if possible
-            int omp_num_threads = 1;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             // query for workspace size
             int64_t info_tst = 0;
             int64_t lwork = -1, lrwork = -1;
@@ -311,9 +304,6 @@ void test_heev_work(Params& params, bool run)
 
             params.ref_time() = time;
 
-            // Reset omp thread number
-            slate_set_num_blas_threads(saved_num_threads);
-
             // Reference Scalapack was run, check reference against test
             // Perform a local operation to get differences Lambda = Lambda - Lambda_ref
             blas::axpy( n, -1.0, &Lambda_ref[0], 1, &Lambda[0], 1 );
@@ -326,7 +316,7 @@ void test_heev_work(Params& params, bool run)
 
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
-        #else
+        #else  // not SLATE_HAVE_SCALAPACK
             if (mpi_rank == 0)
                 printf( "ScaLAPACK not available\n" );
         #endif

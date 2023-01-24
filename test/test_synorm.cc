@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <utility>
 
-#define SLATE_HAVE_SCALAPACK
 //------------------------------------------------------------------------------
 template<typename scalar_t>
 void test_synorm_work(Params& params, bool run)
@@ -109,12 +108,6 @@ void test_synorm_work(Params& params, bool run)
     params.time() = time;
 
     #ifdef SLATE_HAVE_SCALAPACK
-        // set MKL num threads appropriately for parallel BLAS
-        int omp_num_threads;
-        #pragma omp parallel
-        { omp_num_threads = omp_get_num_threads(); }
-        int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
         // BLACS/MPI variables
         int ictxt, p_, q_, myrow_, mycol_, info;
         int A_desc[9];
@@ -311,15 +304,16 @@ void test_synorm_work(Params& params, bool run)
                 }
             }
         }
-        slate_set_num_blas_threads(saved_num_threads);
-
         Cblacs_gridexit(ictxt);
         //Cblacs_exit(1) does not handle re-entering
-    #else
-        SLATE_UNUSED(A_norm);
-        SLATE_UNUSED(check);
-        SLATE_UNUSED(ref);
-        SLATE_UNUSED(extended);
+    #else // not SLATE_HAVE_SCALAPACK
+        SLATE_UNUSED( A_norm );
+        SLATE_UNUSED( check );
+        SLATE_UNUSED( ref );
+        SLATE_UNUSED( extended );
+        SLATE_UNUSED( verbose );
+        if ((check || ref) && mpi_rank == 0)
+            printf( "ScaLAPACK not available\n" );
     #endif
 }
 

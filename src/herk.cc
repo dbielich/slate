@@ -8,10 +8,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::herk from internal::specialization::herk
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// @internal
@@ -23,19 +20,28 @@ namespace specialization {
 /// - bcasts can get ahead of herks by the value of lookahead.
 /// Note A and C are passed by value, so we can transpose if needed
 /// (for uplo = Upper) without affecting caller.
-/// @ingroup herk_specialization
+/// @ingroup herk_impl
 ///
 template <Target target, typename scalar_t>
-void herk(slate::internal::TargetType<target>,
-          blas::real_type<scalar_t> alpha, Matrix<scalar_t> A,
-          blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t> C,
-          int64_t lookahead)
+void herk(
+    blas::real_type<scalar_t> alpha, Matrix<scalar_t> A,
+    blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t> C,
+    Options const& opts )
 {
     using real_t = blas::real_type<scalar_t>;
     using BcastList = typename Matrix<scalar_t>::BcastList;
 
     // Assumes column major
     const Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
+
+    // Use only TileReleaseStrategy::Slate for herk.
+    // Internal herk routine called here won't release
+    // any tiles. This routine will clean up tiles.
+    Options opts2 = opts;
+    opts2[ Option::TileReleaseStrategy ] = TileReleaseStrategy::Slate;
 
     // if upper, change to lower
     if (C.uplo() == Uplo::Upper)
@@ -49,6 +55,8 @@ void herk(slate::internal::TargetType<target>,
     std::vector<uint8_t>  gemm_vector(A.nt());
     uint8_t* bcast = bcast_vector.data();
     uint8_t* gemm  =  gemm_vector.data();
+    const int default_priority = 0;
+    const int default_queue = 0;
 
     if (target == Target::Devices) {
         C.allocateBatchArrays();
@@ -97,7 +105,16 @@ void herk(slate::internal::TargetType<target>,
         {
             internal::herk<target>(
                 alpha, A.sub(0, A.mt()-1, 0, 0),
-                beta,  std::move(C));
+                beta,  std::move(C),
+                default_priority, default_queue, layout, opts2);
+
+            auto A_colblock = A.sub(0, A.mt()-1, 0, 0);
+
+            // Erase remote tiles on all devices including host
+            A_colblock.eraseRemoteWorkspace();
+
+            // Erase local workspace on devices.
+            A_colblock.eraseLocalWorkspace();
         }
 
         for (int64_t k = 1; k < A.nt(); ++k) {
@@ -127,7 +144,16 @@ void herk(slate::internal::TargetType<target>,
             {
                 internal::herk<target>(
                     alpha,       A.sub(0, A.mt()-1, k, k),
-                    real_t(1.0), std::move(C));
+                    real_t(1.0), std::move(C),
+                    default_priority, default_queue, layout, opts2);
+
+                auto A_colblock = A.sub(0, A.mt()-1, k, k);
+
+                // Erase remote tiles on all devices including host
+                A_colblock.eraseRemoteWorkspace();
+
+                // Erase local workspace on devices.
+                A_colblock.eraseLocalWorkspace();
             }
         }
 
@@ -138,25 +164,7 @@ void herk(slate::internal::TargetType<target>,
     C.clearWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup herk_specialization
-///
-template <Target target, typename scalar_t>
-void herk(blas::real_type<scalar_t> alpha, Matrix<scalar_t>& A,
-          blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t>& C,
-          Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::herk(internal::TargetType<target>(),
-                                   alpha, A,
-                                   beta,  C,
-                                   lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel Hermitian rank k update.
@@ -170,6 +178,8 @@ void herk(blas::real_type<scalar_t> alpha, Matrix<scalar_t>& A,
 ///
 ///     auto AT = slate::conjTranspose( A );
 ///     slate::herk( alpha, AT, beta, C );
+///
+/// Complexity (in real): $\approx k n^{2}$ flops.
 ///
 //------------------------------------------------------------------------------
 /// @tparam scalar_t
@@ -204,25 +214,26 @@ void herk(blas::real_type<scalar_t> alpha, Matrix<scalar_t>& A,
 /// @ingroup herk
 ///
 template <typename scalar_t>
-void herk(blas::real_type<scalar_t> alpha, Matrix<scalar_t>& A,
-          blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t>& C,
-          Options const& opts)
+void herk(
+    blas::real_type<scalar_t> alpha, Matrix<scalar_t>& A,
+    blas::real_type<scalar_t> beta,  HermitianMatrix<scalar_t>& C,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            herk<Target::HostTask>(alpha, A, beta, C, opts);
+            impl::herk<Target::HostTask>( alpha, A, beta, C, opts );
             break;
         case Target::HostNest:
-            herk<Target::HostNest>(alpha, A, beta, C, opts);
+            impl::herk<Target::HostNest>( alpha, A, beta, C, opts );
             break;
         case Target::HostBatch:
-            herk<Target::HostBatch>(alpha, A, beta, C, opts);
+            impl::herk<Target::HostBatch>( alpha, A, beta, C, opts );
             break;
         case Target::Devices:
-            herk<Target::Devices>(alpha, A, beta, C, opts);
+            impl::herk<Target::Devices>( alpha, A, beta, C, opts );
             break;
     }
 }

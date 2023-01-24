@@ -18,7 +18,6 @@
 #include <cstdlib>
 #include <utility>
 
-#define SLATE_HAVE_SCALAPACK
 //------------------------------------------------------------------------------
 template<typename scalar_t>
 void test_tbsm_work(Params& params, bool run)
@@ -226,12 +225,6 @@ void test_tbsm_work(Params& params, bool run)
             scalapack_descinit(Bref_desc, Bm, Bn, nb, nb, 0, 0, ictxt, mlocB, &info);
             slate_assert(info == 0);
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             std::vector<real_t> worklantr(std::max(mlocA, nlocA));
             std::vector<real_t> worklange(std::max(mlocB, nlocB));
 
@@ -273,15 +266,13 @@ void test_tbsm_work(Params& params, bool run)
             //params.ref_gflops() = gflop / time;
             params.error() = error;
 
-            slate_set_num_blas_threads(saved_num_threads);
-
             // Allow 3*eps; complex needs 2*sqrt(2) factor; see Higham, 2002, sec. 3.6.
             real_t eps = std::numeric_limits<real_t>::epsilon();
             params.okay() = (params.error() <= 3*eps);
 
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
-        #else
+        #else  // not SLATE_HAVE_SCALAPACK
             if (mpi_rank == 0)
                 printf( "ScaLAPACK not available\n" );
         #endif

@@ -19,7 +19,6 @@
 #include <cstdlib>
 #include <utility>
 
-#define SLATE_HAVE_SCALAPACK
 //------------------------------------------------------------------------------
 template <typename scalar_t>
 void test_gels_work(Params& params, bool run)
@@ -48,6 +47,8 @@ void test_gels_work(Params& params, bool run)
     int verbose = params.verbose();
     slate::Origin origin = params.origin();
     slate::Target target = params.target();
+    slate::Method methodGels = params.method_gels();
+    slate::Method methodCholqr = params.method_cholQR();
     bool consistent = true;
     params.matrix.mark();
     params.matrixB.mark();
@@ -71,7 +72,9 @@ void test_gels_work(Params& params, bool run)
         {slate::Option::Lookahead, lookahead},
         {slate::Option::Target, target},
         {slate::Option::MaxPanelThreads, panel_threads},
-        {slate::Option::InnerBlocking, ib}
+        {slate::Option::InnerBlocking, ib},
+        {slate::Option::MethodCholQR, methodCholqr},
+        {slate::Option::MethodGels, methodGels}
     };
 
     // A is m-by-n, BX is max(m, n)-by-nrhs.
@@ -410,11 +413,6 @@ void test_gels_work(Params& params, bool run)
             scalapack_descinit(BXref_desc, maxmn, nrhs, nb, nb, 0, 0, ictxt, mlocBX, &info);
             slate_assert(info == 0);
 
-            // set MKL num threads appropriately for parallel BLAS
-            int omp_num_threads;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
             int64_t info_ref = 0;
 
             // query for workspace size
@@ -441,10 +439,11 @@ void test_gels_work(Params& params, bool run)
             params.ref_time() = time;
             params.ref_gflops() = gflop / time;
 
-            slate_set_num_blas_threads(saved_num_threads);
-
             Cblacs_gridexit(ictxt);
             //Cblacs_exit(1) does not handle re-entering
+        #else  // not SLATE_HAVE_SCALAPACK
+            if (mpi_rank == 0)
+                printf( "ScaLAPACK not available\n" );
         #endif
     }
 }

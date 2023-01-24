@@ -359,6 +359,12 @@ void test_TrapezoidMatrix_fromDevices()
         mtiles, mtiles_local, m_local,
         ntiles, ntiles_local, n_local, lda );
 
+    // device specific queues
+    std::vector< blas::Queue* > dev_queues;
+    dev_queues.resize(num_devices);
+    for (int dev = 0; dev < num_devices; ++dev)
+        dev_queues[dev] = new blas::Queue(dev, 0);
+
     double** Aarray = new double*[ num_devices ];
     for (int dev = 0; dev < num_devices; ++dev) {
         int ntiles_local2, ntiles_dev, n_dev;
@@ -368,7 +374,7 @@ void test_TrapezoidMatrix_fromDevices()
 
         // blas::device_malloc returns null if len = 0, so make it at least 1.
         int64_t len = std::max(lda * n_dev, 1);
-        Aarray[dev] = blas::device_malloc<double>(len);
+        Aarray[dev] = blas::device_malloc<double>(len, *dev_queues[dev]);
         assert(Aarray[dev] != nullptr);
     }
 
@@ -407,7 +413,7 @@ void test_TrapezoidMatrix_fromDevices()
     }
 
     for (int dev = 0; dev < num_devices; ++dev) {
-        blas::device_free(Aarray[dev]);
+        blas::device_free(Aarray[dev], *dev_queues[dev]);
     }
     delete[] Aarray;
 
@@ -418,6 +424,10 @@ void test_TrapezoidMatrix_fromDevices()
             blas::Uplo::General, blas::Diag::Unit,
             m, n, Aarray, num_devices, lda, nb, p, q, mpi_comm ),
         slate::Exception);
+
+    // free the device specific queues
+    for (int dev = 0; dev < num_devices; ++dev)
+        delete dev_queues[dev];
 }
 
 //==============================================================================
@@ -774,6 +784,17 @@ void test_TrapezoidMatrix_allocateBatchArrays()
         test_assert( U.array_host(device) == nullptr );
         test_assert( U.array_device(device) == nullptr );
     }
+}
+
+//------------------------------------------------------------------------------
+/// Tests A.tileLayoutReset().
+/// Incomplete testing; currently only calls it to check for linking, per
+/// https://bitbucket.org/icl/slate/issues/45
+///
+void test_Trapezoid_tileLayoutReset()
+{
+    slate::TrapezoidMatrix<double> A;
+    A.tileLayoutReset();
 }
 
 //==============================================================================
@@ -1825,6 +1846,8 @@ void run_tests()
     run_test(test_TrapezoidMatrix_emptyLikeOp,         "TrapezoidMatrix::emptyLike(..., Trans)", mpi_comm);
     run_test(test_TrapezoidMatrix_insertLocalTiles,    "TrapezoidMatrix::insertLocalTiles",      mpi_comm);
     run_test(test_TrapezoidMatrix_allocateBatchArrays, "TrapezoidMatrix::allocateBatchArrays",   mpi_comm);
+    run_test( test_Trapezoid_tileLayoutReset,
+              "TrapezoidMatrix::tileLayoutReset()", mpi_comm );
 
     if (mpi_rank == 0)
         printf("\nSub-matrices\n");

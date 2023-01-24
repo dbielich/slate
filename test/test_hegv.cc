@@ -19,7 +19,7 @@
 #include <cstdlib>
 #include <limits>
 #include <utility>
-#define SLATE_HAVE_SCALAPACK
+
 //------------------------------------------------------------------------------
 template <typename scalar_t>
 void test_hegv_work(Params& params, bool run)
@@ -341,12 +341,6 @@ void test_hegv_work(Params& params, bool run)
             scalapack_descinit(Z_desc, n, n, nb, nb, 0, 0, ictxt, mlocZ, &info);
             slate_assert(info == 0);
 
-            // set num threads appropriately for parallel BLAS if possible
-            int omp_num_threads = 1;
-            #pragma omp parallel
-            { omp_num_threads = omp_get_num_threads(); }
-            int saved_num_threads = slate_set_num_blas_threads(omp_num_threads);
-
             const char* range = "A";
             int64_t vl=0, vu=0, il=0, iu=0;
             real_t abstol=0;
@@ -410,9 +404,6 @@ void test_hegv_work(Params& params, bool run)
 
             params.ref_time() = time;
 
-            // Reset omp thread number
-            slate_set_num_blas_threads(saved_num_threads);
-
             if (! ref_only) {
                 // Reference Scalapack was run, check reference eigenvalues
                 // Perform a local operation to get differences Lambda = Lambda - Lambda_ref
@@ -421,10 +412,10 @@ void test_hegv_work(Params& params, bool run)
                 params.error2() = blas::asum( n, &Lambda[0], 1 )
                                 / blas::asum( n, &Lambda_ref[0], 1 );
                 real_t tol = params.tol() * 0.5 * std::numeric_limits<real_t>::epsilon();
-                params.okay() = (params.error2() <= tol);
+                params.okay() = params.okay() && (params.error2() <= tol);
             }
             Cblacs_gridexit(ictxt);
-        #else
+        #else  // not SLATE_HAVE_SCALAPACK
             if (mpi_rank == 0)
                 printf( "ScaLAPACK not available\n" );
         #endif

@@ -15,6 +15,122 @@ namespace slate {
 
 namespace device {
 
+//------------------------------------------------------------------------------
+// device single tile routine
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    float numer, float denom,
+    std::complex<float>* A, int64_t lda,
+    blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            numer, denom,
+            (cuFloatComplex*) A, lda,
+            queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            numer, denom,
+            (hipFloatComplex*) A, lda,
+            queue);
+#endif
+}
+
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    std::complex<float> numer, std::complex<float> denom,
+    std::complex<float>* A, int64_t lda,
+    blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            make_cuFloatComplex( numer.real(), numer.imag() ),
+            make_cuFloatComplex( denom.real(), denom.imag() ),
+            (cuFloatComplex*) A, lda,
+            queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            make_hipFloatComplex( numer.real(), numer.imag() ),
+            make_hipFloatComplex( denom.real(), denom.imag() ),
+            (hipFloatComplex*) A, lda,
+            queue);
+#endif
+}
+
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    double numer, double denom,
+    std::complex<double>* A, int64_t lda,
+    blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            numer, denom,
+            (cuDoubleComplex*) A, lda,
+            queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            numer, denom,
+            (hipDoubleComplex*) A, lda,
+            queue);
+#endif
+}
+
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    std::complex<double> numer, std::complex<double> denom,
+    std::complex<double>* A, int64_t lda,
+    blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            make_cuDoubleComplex( numer.real(), numer.imag() ),
+            make_cuDoubleComplex( denom.real(), denom.imag() ),
+            (cuDoubleComplex*) A, lda,
+            queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            make_hipDoubleComplex( numer.real(), numer.imag() ),
+            make_hipDoubleComplex( denom.real(), denom.imag() ),
+            (hipDoubleComplex*) A, lda,
+            queue);
+#endif
+}
+
+#if ! defined( SLATE_HAVE_DEVICE )
+// Specializations to allow compilation without CUDA or HIP.
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    double numer, double denom,
+    double* A, int64_t lda,
+    blas::Queue& queue)
+{
+}
+
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    float numer, float denom,
+    float* A, int64_t lda,
+    blas::Queue& queue)
+{
+}
+#endif // not SLATE_HAVE_DEVICE
+
+//==============================================================================
+namespace batch {
+
+//------------------------------------------------------------------------------
+// device::batch routine
 template <>
 void gescale(
     int64_t m, int64_t n,
@@ -22,15 +138,38 @@ void gescale(
     std::complex<float>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gescale(m, n,
             numer, denom,
             (cuFloatComplex**) Aarray, lda,
             batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gescale(m, n,
             numer, denom,
+            (hipFloatComplex**) Aarray, lda,
+            batch_count, queue);
+#endif
+}
+
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    std::complex<float> numer, std::complex<float> denom,
+    std::complex<float>** Aarray, int64_t lda,
+    int64_t batch_count, blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            make_cuFloatComplex( numer.real(), numer.imag() ),
+            make_cuFloatComplex( denom.real(), denom.imag() ),
+            (cuFloatComplex**) Aarray, lda,
+            batch_count, queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            make_hipFloatComplex( numer.real(), numer.imag() ),
+            make_hipFloatComplex( denom.real(), denom.imag() ),
             (hipFloatComplex**) Aarray, lda,
             batch_count, queue);
 #endif
@@ -43,13 +182,13 @@ void gescale(
     std::complex<double>** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     gescale(m, n,
             numer, denom,
             (cuDoubleComplex**) Aarray, lda,
             batch_count, queue);
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     gescale(m, n,
             numer, denom,
             (hipDoubleComplex**) Aarray, lda,
@@ -57,7 +196,30 @@ void gescale(
 #endif
 }
 
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+template <>
+void gescale(
+    int64_t m, int64_t n,
+    std::complex<double> numer, std::complex<double> denom,
+    std::complex<double>** Aarray, int64_t lda,
+    int64_t batch_count, blas::Queue& queue)
+{
+#if defined( BLAS_HAVE_CUBLAS )
+    gescale(m, n,
+            make_cuDoubleComplex( numer.real(), numer.imag() ),
+            make_cuDoubleComplex( denom.real(), denom.imag() ),
+            (cuDoubleComplex**) Aarray, lda,
+            batch_count, queue);
+
+#elif defined( BLAS_HAVE_ROCBLAS )
+    gescale(m, n,
+            make_hipDoubleComplex( numer.real(), numer.imag() ),
+            make_hipDoubleComplex( denom.real(), denom.imag() ),
+            (hipDoubleComplex**) Aarray, lda,
+            batch_count, queue);
+#endif
+}
+
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void gescale(
@@ -76,8 +238,9 @@ void gescale(
     int64_t batch_count, blas::Queue& queue)
 {
 }
-#endif // not SLATE_WITH_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
+} // namespace batch
 } // namespace device
 
 namespace internal {
@@ -156,6 +319,8 @@ void scale(internal::TargetType<Target::Devices>,
 {
     using ij_tuple = typename BaseMatrix<scalar_t>::ij_tuple;
 
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[4][2] = {
         { 0,        A.mt()-1 },
         { A.mt()-1, A.mt()   },
@@ -222,9 +387,10 @@ void scale(internal::TargetType<Target::Devices>,
 
             for (int q = 0; q < 4; ++q) {
                 if (group_count[q] > 0) {
-                    device::gescale(mb[q], nb[q],
-                                    numer, denom, a_array_dev, lda[q],
-                                    group_count[q], *queue);
+                    device::batch::gescale(
+                            mb[q], nb[q],
+                            numer, denom, a_array_dev, lda[q],
+                            group_count[q], *queue);
                     a_array_dev += group_count[q];
                 }
             }

@@ -12,7 +12,7 @@
 // Extend BLAS real_type to cover cuComplex and hipComplex.
 // todo: should we move it to BLAS++?
 //
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     #include <cuComplex.h>
 
     namespace blas {
@@ -29,7 +29,7 @@
 
     } // namespace blas
 
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     #include <hip/hip_complex.h>
 
     namespace blas {
@@ -45,7 +45,7 @@
     };
 
     } // namespace blas
-#endif // #elif ! defined(SLATE_NO_HIP)
+#endif // #elif defined( BLAS_HAVE_ROCBLAS )
 
 namespace slate {
 
@@ -53,11 +53,16 @@ namespace slate {
 /// GPU device implementations of kernels.
 namespace device {
 
+// Simplify checking for GPU device support (CUDA or ROCm).
+#if defined( BLAS_HAVE_CUBLAS ) || defined( BLAS_HAVE_ROCBLAS )
+    #define SLATE_HAVE_DEVICE
+#endif
+
 //------------------------------------------------------------------------------
 template <typename src_scalar_t, typename dst_scalar_t>
 void gecopy(
     int64_t m, int64_t n,
-    src_scalar_t** Aarray, int64_t lda,
+    src_scalar_t const* const* Aarray, int64_t lda,
     dst_scalar_t** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue& queue);
 
@@ -66,7 +71,7 @@ template <typename src_scalar_t, typename dst_scalar_t>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    src_scalar_t** Aarray, int64_t lda,
+    src_scalar_t const* const* Aarray, int64_t lda,
     dst_scalar_t** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue& queue);
 
@@ -74,26 +79,26 @@ void tzcopy(
 template <typename scalar_t>
 void geadd(
     int64_t m, int64_t n,
-    scalar_t alpha, scalar_t** Aarray, int64_t lda,
-    scalar_t beta, scalar_t** Barray, int64_t ldb,
-    int64_t batch_count, blas::Queue& queue);
+    scalar_t const& alpha, scalar_t* A, int64_t lda,
+    scalar_t const& beta, scalar_t* B, int64_t ldb,
+    blas::Queue& queue);
 
 //------------------------------------------------------------------------------
 template <typename scalar_t>
 void tzadd(
      Uplo uplo,
      int64_t m, int64_t n,
-     scalar_t alpha, scalar_t** Aarray, int64_t lda,
-     scalar_t beta, scalar_t** Barray, int64_t ldb,
+     scalar_t const& alpha, scalar_t** Aarray, int64_t lda,
+     scalar_t const& beta, scalar_t** Barray, int64_t ldb,
      int64_t batch_count, blas::Queue& queue);
 
 //------------------------------------------------------------------------------
-template <typename scalar_t>
+template <typename scalar_t, typename scalar_t2>
 void gescale(
     int64_t m, int64_t n,
-    blas::real_type<scalar_t> numer, blas::real_type<scalar_t> denom,
-    scalar_t** Aarray, int64_t lda,
-    int64_t batch_count, blas::Queue& queue);
+    scalar_t2 numer, scalar_t2 denom,
+    scalar_t* A, int64_t lda,
+    blas::Queue& queue);
 
 //------------------------------------------------------------------------------
 template <typename scalar_t>
@@ -105,10 +110,56 @@ void tzscale(
     int64_t batch_count, blas::Queue& queue);
 
 //------------------------------------------------------------------------------
+template <typename scalar_t, typename scalar_t2>
+void gescale_row_col_batch(
+    Equed equed, int64_t m, int64_t n,
+    scalar_t2 const* const* Rarray,
+    scalar_t2 const* const* Carray,
+    scalar_t** Aarray, int64_t lda,
+    int64_t batch_count, blas::Queue& queue);
+
+//------------------------------------------------------------------------------
 template <typename scalar_t>
 void geset(
     int64_t m, int64_t n,
-    scalar_t offdiag_value, scalar_t diag_value, scalar_t** Aarray, int64_t lda,
+    scalar_t const& offdiag_value, scalar_t const& diag_value,
+    scalar_t* A, int64_t lda,
+    blas::Queue& queue);
+
+//------------------------------------------------------------------------------
+template <typename scalar_t>
+void tzset(
+    Uplo uplo,
+    int64_t m, int64_t n,
+    scalar_t const& offdiag_value, scalar_t const& diag_value,
+    scalar_t* A, int64_t lda,
+    blas::Queue& queue );
+
+namespace batch {
+
+//------------------------------------------------------------------------------
+template <typename scalar_t, typename scalar_t2>
+void gescale(
+    int64_t m, int64_t n,
+    scalar_t2 numer, scalar_t2 denom,
+    scalar_t** Aarray, int64_t lda,
+    int64_t batch_count, blas::Queue& queue);
+
+//------------------------------------------------------------------------------
+template <typename scalar_t>
+void geadd(
+    int64_t m, int64_t n,
+    scalar_t const& alpha, scalar_t** Aarray, int64_t lda,
+    scalar_t const& beta, scalar_t** Barray, int64_t ldb,
+    int64_t batch_count, blas::Queue& queue);
+
+
+//------------------------------------------------------------------------------
+template <typename scalar_t>
+void geset(
+    int64_t m, int64_t n,
+    scalar_t const& offdiag_value, scalar_t const& diag_value,
+    scalar_t** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue);
 
 //------------------------------------------------------------------------------
@@ -116,17 +167,7 @@ template <typename scalar_t>
 void tzset(
     Uplo uplo,
     int64_t m, int64_t n,
-    scalar_t offdiag_value, scalar_t diag_value,
-    scalar_t* A, int64_t lda,
-    blas::Queue& queue );
-
-namespace batch {
-
-template <typename scalar_t>
-void tzset(
-    Uplo uplo,
-    int64_t m, int64_t n,
-    scalar_t offdiag_value, scalar_t diag_value,
+    scalar_t const& offdiag_value, scalar_t const& diag_value,
     scalar_t** Aarray, int64_t lda,
     int64_t batch_count, blas::Queue& queue );
 

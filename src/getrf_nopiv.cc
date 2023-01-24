@@ -12,26 +12,29 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::getrf_nopiv from internal::specialization::getrf_nopiv
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 /// Distributed parallel LU factorization without pivoting.
 /// Generic implementation for any target.
 /// Panel and lookahead computed on host using Host OpenMP task.
-/// @ingroup gesv_specialization
+/// @ingroup gesv_impl
 ///
 template <Target target, typename scalar_t>
-void getrf_nopiv(slate::internal::TargetType<target>,
-           Matrix<scalar_t>& A,
-           int64_t ib, int64_t lookahead)
+void getrf_nopiv(
+    Matrix<scalar_t>& A,
+    Options const& opts )
 {
     using BcastList = typename Matrix<scalar_t>::BcastList;
     using BcastListTag = typename Matrix<scalar_t>::BcastListTag;
 
+    const scalar_t one = 1.0;
+
     Layout layout = Layout::ColMajor;
+
+    // Options
+    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
+    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
 
     if (target == Target::Devices) {
         // two batch arrays plus one for each lookahead
@@ -95,8 +98,7 @@ void getrf_nopiv(slate::internal::TargetType<target>,
 
                 internal::trsm<target>(
                     Side::Right,
-                    scalar_t(1.0), std::move(Tkk),
-                                   A.sub(k+1, A_mt-1, k, k),
+                    one, std::move( Tkk ), A.sub(k+1, A_mt-1, k, k),
                     priority_one, layout, 0);
 
 
@@ -124,8 +126,7 @@ void getrf_nopiv(slate::internal::TargetType<target>,
                     // solve A(k, k) A(k, j) = A(k, j)
                     internal::trsm<target>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, j, j),
+                        one, std::move( Tkk ), A.sub(k, k, j, j),
                         priority_one, layout, j-k+1);
 
                     // send A(k, j) across column A(k+1:mt-1, j)
@@ -138,9 +139,9 @@ void getrf_nopiv(slate::internal::TargetType<target>,
                 {
                     // A(k+1:mt-1, j) -= A(k+1:mt-1, k) * A(k, j)
                     internal::gemm<target>(
-                        scalar_t(-1.0), A.sub(k+1, A_mt-1, k, k),
-                                        A.sub(k, k, j, j),
-                        scalar_t(1.0),  A.sub(k+1, A_mt-1, j, j),
+                        -one, A.sub(k+1, A_mt-1, k, k),
+                              A.sub(k, k, j, j),
+                        one,  A.sub(k+1, A_mt-1, j, j),
                         layout, priority_one, j-k+1);
                 }
             }
@@ -156,11 +157,10 @@ void getrf_nopiv(slate::internal::TargetType<target>,
                         TriangularMatrix<scalar_t>(Uplo::Lower, Diag::Unit, Akk);
 
                     // solve A(k, k) A(k, kl+1:nt-1) = A(k, kl+1:nt-1)
-                    // todo: target
                     internal::trsm<target>(
                         Side::Left,
-                        scalar_t(1.0), std::move(Tkk),
-                                       A.sub(k, k, k+1+lookahead, A_nt-1),
+                        one, std::move( Tkk ),
+                             A.sub(k, k, k+1+lookahead, A_nt-1),
                         priority_zero, layout, 1);
                     // send A(k, kl+1:A_nt-1) across A(k+1:mt-1, kl+1:nt-1)
                     BcastListTag bcast_list;
@@ -181,9 +181,9 @@ void getrf_nopiv(slate::internal::TargetType<target>,
                 {
                     // A(k+1:mt-1, kl+1:nt-1) -= A(k+1:mt-1, k) * A(k, kl+1:nt-1)
                     internal::gemm<target>(
-                        scalar_t(-1.0), A.sub(k+1, A_mt-1, k, k),
-                                        A.sub(k, k, k+1+lookahead, A_nt-1),
-                        scalar_t(1.0),  A.sub(k+1, A_mt-1, k+1+lookahead, A_nt-1),
+                        -one, A.sub(k+1, A_mt-1, k, k),
+                              A.sub(k, k, k+1+lookahead, A_nt-1),
+                        one,  A.sub(k+1, A_mt-1, k+1+lookahead, A_nt-1),
                         layout, priority_zero, 1);
                 }
             }
@@ -228,24 +228,7 @@ void getrf_nopiv(slate::internal::TargetType<target>,
     A.clearWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup gesv_specialization
-///
-template <Target target, typename scalar_t>
-void getrf_nopiv(Matrix<scalar_t>& A,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    int64_t ib = get_option<int64_t>( opts, Option::InnerBlocking, 16 );
-
-    internal::specialization::getrf_nopiv(internal::TargetType<target>(),
-                                          A, ib, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel LU factorization without pivoting.
@@ -295,24 +278,28 @@ void getrf_nopiv(Matrix<scalar_t>& A,
 /// @ingroup gesv_computational
 ///
 template <typename scalar_t>
-void getrf_nopiv(Matrix<scalar_t>& A,
-           Options const& opts)
+void getrf_nopiv(
+    Matrix<scalar_t>& A,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            getrf_nopiv<Target::HostTask>(A, opts);
+            impl::getrf_nopiv<Target::HostTask>( A, opts );
             break;
+
         case Target::HostNest:
-            getrf_nopiv<Target::HostNest>(A, opts);
+            impl::getrf_nopiv<Target::HostNest>( A, opts );
             break;
+
         case Target::HostBatch:
-            getrf_nopiv<Target::HostBatch>(A, opts);
+            impl::getrf_nopiv<Target::HostBatch>( A, opts );
             break;
+
         case Target::Devices:
-            getrf_nopiv<Target::Devices>(A, opts);
+            impl::getrf_nopiv<Target::Devices>( A, opts );
             break;
     }
     // todo: return value for errors?

@@ -108,6 +108,7 @@ inline slate::SymmetricMatrix<scalar_t> slate_scalapack_submatrix(int Am, int An
 template< typename scalar_t >
 inline slate::TriangularMatrix<scalar_t> slate_scalapack_submatrix(int Am, int An, slate::TriangularMatrix<scalar_t>& A, int ia, int ja, int* desca)
 {
+    if (ia == 1 && ja == 1 && Am == A.m() && An == A.n()) return A;
     assert((ia-1) % desc_MB(desca) == 0);
     assert(Am % desc_MB(desca) == 0);
     int64_t i1 = (ia-1)/desc_MB(desca);
@@ -224,23 +225,6 @@ inline int64_t scalapack_numroc(int64_t n, int64_t nb, int iproc, int isrcproc, 
 
 #define scalapack_indxl2g BLAS_FORTRAN_NAME(indxl2g,INDXL2G)
 extern "C" int scalapack_indxl2g(int* indxloc, int* nb, int* iproc, int* isrcproc, int* nprocs);
-
-
-//------------------------------------------------------------------------------
-// BLAS thread management.
-// Note this is duplicated in the testing module
-#ifdef SLATE_WITH_MKL
-#include <mkl_service.h>
-inline int slate_set_num_blas_threads(const int nt)
-{
-    int old = mkl_get_max_threads();
-    mkl_set_num_threads(nt);
-    return old;
-}
-#else
-inline int slate_set_num_blas_threads(const int nt) { return -1; }
-#endif
-
 
 } // namespace scalapack_api
 } // namespace slate

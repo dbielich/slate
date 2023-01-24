@@ -20,6 +20,7 @@ typedef blas::Diag Diag;
 typedef blas::Side Side;
 typedef blas::Layout Layout;
 
+using lapack::Equed;
 typedef lapack::Norm Norm;
 typedef lapack::Direction Direction;
 
@@ -45,7 +46,11 @@ enum class TileReleaseStrategy : char {
 };
 
 namespace internal {
+
+/// TargetType is used to overload functions, since there is no C++
+/// partial specialization of functions, only of classes.
 template <Target> class TargetType {};
+
 } // namespace internal
 
 //------------------------------------------------------------------------------
@@ -74,10 +79,15 @@ enum class Option : char {
     PrintWidth,         ///< width print format specifier
     PrintPrecision,     ///< precision print format specifier
                         ///< For correct printing, PrintWidth = PrintPrecision + 6.
+    PivotThreshold,     ///< threshold for pivoting, >= 0, <= 1
+
+    // Methods, listed alphabetically.
+    MethodCholQR,       ///< Select the algorithm to compute A^H * A
+    MethodGels,         ///< Select the gels algorithm
     MethodGemm,         ///< Select the gemm algorithm
     MethodHemm,         ///< Select the hemm algorithm
+    MethodLU,           ///< Select the LU (getrf) algorithm
     MethodTrsm,         ///< Select the trsm algorithm
-    PivotThreshold,     ///< threshold for pivoting, >= 0, <= 1
 };
 
 //------------------------------------------------------------------------------

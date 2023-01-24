@@ -11,10 +11,7 @@
 
 namespace slate {
 
-// specialization namespace differentiates, e.g.,
-// internal::trtrm from internal::specialization::trtrm
-namespace internal {
-namespace specialization {
+namespace impl {
 
 //------------------------------------------------------------------------------
 ///
@@ -22,15 +19,17 @@ namespace specialization {
 ///
 /// Distributed parallel inverse of a triangular matrix.
 /// Generic implementation for any target.
-/// Panel and lookahead computed on host using Host OpenMP task.
-/// @ingroup tr_specialization
+/// @ingroup trtrm_impl
 ///
 template <Target target, typename scalar_t>
-void trtrm(slate::internal::TargetType<target>,
-           TriangularMatrix<scalar_t> A, int64_t lookahead)
+void trtrm(
+    TriangularMatrix<scalar_t> A,
+    Options const& opts )
 {
     using real_t = blas::real_type<scalar_t>;
     using BcastList = typename Matrix<scalar_t>::BcastList;
+
+    const scalar_t one = 1.0;
 
     // Assumes column major
     const Layout layout = Layout::ColMajor;
@@ -103,8 +102,7 @@ void trtrm(slate::internal::TargetType<target>,
                 Akk = conjTranspose(Akk);
                 internal::trmm<Target::HostTask>(
                     Side::Left,
-                    scalar_t(1.0), std::move(Akk),
-                                   A.sub(k, k, 0, k-1));
+                    one, std::move( Akk ), A.sub(k, k, 0, k-1) );
             }
 
             // diagonal block, L = L^H L
@@ -122,22 +120,7 @@ void trtrm(slate::internal::TargetType<target>,
     A.releaseWorkspace();
 }
 
-} // namespace specialization
-} // namespace internal
-
-//------------------------------------------------------------------------------
-/// Version with target as template parameter.
-/// @ingroup tr_specialization
-///
-template <Target target, typename scalar_t>
-void trtrm(TriangularMatrix<scalar_t>& A,
-           Options const& opts)
-{
-    int64_t lookahead = get_option<int64_t>( opts, Option::Lookahead, 1 );
-
-    internal::specialization::trtrm(internal::TargetType<target>(),
-                                    A, lookahead);
-}
+} // namespace impl
 
 //------------------------------------------------------------------------------
 /// Distributed parallel inverse of a triangular matrix.
@@ -154,9 +137,6 @@ void trtrm(TriangularMatrix<scalar_t>& A,
 ///
 /// @param[in] opts
 ///     Additional options, as map of name = value pairs. Possible options:
-///     - Option::Lookahead:
-///       Number of panels to overlap with matrix updates.
-///       lookahead >= 0. Default 1.
 ///     - Option::Target:
 ///       Implementation to target. Possible values:
 ///       - HostTask:  OpenMP tasks on CPU host [default].
@@ -170,24 +150,28 @@ void trtrm(TriangularMatrix<scalar_t>& A,
 /// @ingroup tr_computational
 ///
 template <typename scalar_t>
-void trtrm(TriangularMatrix<scalar_t>& A,
-           Options const& opts)
+void trtrm(
+    TriangularMatrix<scalar_t>& A,
+    Options const& opts )
 {
     Target target = get_option( opts, Option::Target, Target::HostTask );
 
     switch (target) {
         case Target::Host:
         case Target::HostTask:
-            trtrm<Target::HostTask>(A, opts);
+            impl::trtrm<Target::HostTask>( A, opts );
             break;
+
         case Target::HostNest:
-            trtrm<Target::HostNest>(A, opts);
+            impl::trtrm<Target::HostNest>( A, opts );
             break;
+
         case Target::HostBatch:
-            trtrm<Target::HostBatch>(A, opts);
+            impl::trtrm<Target::HostBatch>( A, opts );
             break;
+
         case Target::Devices:
-            trtrm<Target::Devices>(A, opts);
+            impl::trtrm<Target::Devices>( A, opts );
             break;
     }
     // todo: return value for errors?

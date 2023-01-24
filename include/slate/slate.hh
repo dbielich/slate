@@ -27,8 +27,8 @@
 namespace slate {
 
 // Version is updated by make_release.py; DO NOT EDIT.
-// Version 2022.06.00
-#define SLATE_VERSION 20220600
+// Version 2022.07.00
+#define SLATE_VERSION 20220700
 
 int version();
 const char* id();
@@ -60,6 +60,7 @@ void copy(
 
 //-----------------------------------------
 // scale()
+// General matrix.
 template <typename scalar_t>
 void scale(
     blas::real_type<scalar_t> numer,
@@ -67,6 +68,7 @@ void scale(
     Matrix<scalar_t>& A,
     Options const& opts = Options());
 
+/// General matrix, version with denom = 1.0.
 template <typename scalar_t>
 void scale(
     blas::real_type<scalar_t> value,
@@ -77,6 +79,7 @@ void scale(
     scale(value, one, A, opts);
 }
 
+// BaseTrapezoid matrix.
 template <typename scalar_t>
 void scale(
     blas::real_type<scalar_t> numer,
@@ -84,6 +87,7 @@ void scale(
     BaseTrapezoidMatrix<scalar_t>& A,
     Options const& opts = Options());
 
+/// BaseTrapezoid matrix, version with denom = 1.0.
 template <typename scalar_t>
 void scale(
     blas::real_type<scalar_t> value,
@@ -93,6 +97,17 @@ void scale(
     blas::real_type<scalar_t> one = 1.0;
     scale(value, one, A, opts);
 }
+
+//-----------------------------------------
+// scale_row_col
+// General matrix.
+template <typename scalar_t, typename scalar_t2>
+void scale_row_col(
+    Equed equed,
+    std::vector< scalar_t2 > const& R,
+    std::vector< scalar_t2 > const& C,
+    Matrix<scalar_t>& A,
+    Options const& opts = Options());
 
 //-----------------------------------------
 // set()
@@ -459,6 +474,7 @@ void gesv(
 
 //-----------------------------------------
 // gesv_nopiv()
+// todo: deprecate, use gesv( ..., { MethodLU: NoPiv } )
 template <typename scalar_t>
 void gesv_nopiv(
     Matrix<scalar_t>& A,
@@ -505,6 +521,13 @@ void getrf_nopiv(
     Options const& opts = Options());
 
 //-----------------------------------------
+// getrf_tntpiv()
+template <typename scalar_t>
+void getrf_tntpiv(
+    Matrix<scalar_t>& A, Pivots& pivots,
+    Options const& opts = Options());
+
+//-----------------------------------------
 // gbtrs()
 template <typename scalar_t>
 void gbtrs(
@@ -522,6 +545,7 @@ void getrs(
 
 //-----------------------------------------
 // getrs_nopiv()
+// todo: deprecate, use getrs( ..., { MethodLU: NoPiv } )
 template <typename scalar_t>
 void getrs_nopiv(
     Matrix<scalar_t>& A,
@@ -754,9 +778,36 @@ using TriangularFactors = std::vector< Matrix<scalar_t> >;
 
 //-----------------------------------------
 // gels()
+
+// Using QR
 template <typename scalar_t>
+void gels_qr(
+    Matrix<scalar_t>& A, TriangularFactors<scalar_t>& T,
+    Matrix<scalar_t>& BX,
+    Options const& opts = Options());
+
+// Using CholeskyQR
+template <typename scalar_t>
+void gels_cholqr(
+    Matrix<scalar_t>& A, Matrix<scalar_t>& R,
+    Matrix<scalar_t>& BX,
+    Options const& opts = Options());
+
+// Backward compatibility
+template <typename scalar_t>
+[[deprecated( "Use gels( A, BX[, opts] ) instead." )]]
 void gels(
     Matrix<scalar_t>& A, TriangularFactors<scalar_t>& T,
+    Matrix<scalar_t>& BX,
+    Options const& opts = Options())
+{
+    gels_qr( A, T, BX, opts );
+}
+
+// Routine selection
+template <typename scalar_t>
+void gels(
+    Matrix<scalar_t>& A,
     Matrix<scalar_t>& BX,
     Options const& opts = Options());
 
@@ -777,6 +828,14 @@ void unmqr(
     Side side, Op op,
     Matrix<scalar_t>& A, TriangularFactors<scalar_t>& T,
     Matrix<scalar_t>& C,
+    Options const& opts = Options());
+
+//-----------------------------------------
+// cholQR
+template <typename scalar_t>
+void cholqr(
+    Matrix<scalar_t>& A,
+    Matrix<scalar_t>& R,
     Options const& opts = Options());
 
 //-----------------------------------------
@@ -1025,6 +1084,28 @@ void steqr2(
     std::vector< blas::real_type<scalar_t> >& E,
     Matrix<scalar_t>& Z,
     Options const& opts = Options());
+
+//------------------------------------------------------------------------------
+// Condition number estimate
+
+//-----------------------------------------
+// gecondest()
+template <typename scalar_t>
+void gecondest(
+        Norm in_norm,
+        Matrix<scalar_t>& A,
+        blas::real_type<scalar_t> *Anorm,
+        blas::real_type<scalar_t> *rcond,
+        Options const& opts = Options());
+
+//-----------------------------------------
+// trcondest()
+template <typename scalar_t>
+void trcondest(
+        Norm in_norm,
+        TriangularMatrix<scalar_t>& A,
+        blas::real_type<scalar_t> *rcond,
+        Options const& opts = Options());
 
 } // namespace slate
 

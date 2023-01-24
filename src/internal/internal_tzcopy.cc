@@ -19,17 +19,17 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const* const* Aarray, int64_t lda,
     std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzcopy(uplo,
            m, n,
            (cuFloatComplex**) Aarray, lda,
            (cuFloatComplex**) Barray, ldb,
            batch_count, queue);
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzcopy(uplo,
            m, n,
            (hipFloatComplex**) Aarray, lda,
@@ -42,17 +42,17 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<float>** Aarray, int64_t lda,
+    std::complex<float> const* const* Aarray, int64_t lda,
     std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzcopy(uplo,
            m, n,
            (cuFloatComplex**) Aarray, lda,
            (cuDoubleComplex**) Barray, ldb,
            batch_count, queue);
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzcopy(uplo,
            m, n,
            (hipFloatComplex**) Aarray, lda,
@@ -65,17 +65,17 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const* const* Aarray, int64_t lda,
     std::complex<double>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzcopy(uplo,
            m, n,
            (cuDoubleComplex**) Aarray, lda,
            (cuDoubleComplex**) Barray, ldb,
            batch_count, queue);
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzcopy(uplo,
            m, n,
            (hipDoubleComplex**) Aarray, lda,
@@ -88,17 +88,17 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    std::complex<double>** Aarray, int64_t lda,
+    std::complex<double> const* const* Aarray, int64_t lda,
     std::complex<float>** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
-#if ! defined(SLATE_NO_CUDA)
+#if defined( BLAS_HAVE_CUBLAS )
     tzcopy(uplo,
            m, n,
            (cuDoubleComplex**) Aarray, lda,
            (cuFloatComplex**) Barray, ldb,
            batch_count, queue);
-#elif ! defined(SLATE_NO_HIP)
+#elif defined( BLAS_HAVE_ROCBLAS )
     tzcopy(uplo,
            m, n,
            (hipDoubleComplex**) Aarray, lda,
@@ -108,13 +108,13 @@ void tzcopy(
 }
 
 //---------------------------------------------------
-#if defined(SLATE_NO_CUDA) && defined(SLATE_NO_HIP)
+#if ! defined( SLATE_HAVE_DEVICE )
 // Specializations to allow compilation without CUDA or HIP.
 template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    double** Aarray, int64_t lda,
+    double const* const* Aarray, int64_t lda,
     double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -124,7 +124,7 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    double** Aarray, int64_t lda,
+    double const* const* Aarray, int64_t lda,
     float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -134,7 +134,7 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    float** Aarray, int64_t lda,
+    float const* const* Aarray, int64_t lda,
     float** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
@@ -143,12 +143,12 @@ template <>
 void tzcopy(
     Uplo uplo,
     int64_t m, int64_t n,
-    float** Aarray, int64_t lda,
+    float const* const* Aarray, int64_t lda,
     double** Barray, int64_t ldb,
     int64_t batch_count, blas::Queue &queue)
 {
 }
-#endif // not SLATE_NO_CUDA
+#endif // not SLATE_HAVE_DEVICE
 
 } // namespace device
 
@@ -195,7 +195,7 @@ void copy(internal::TargetType<Target::HostTask>,
         if (j < B.mt() && B.tileIsLocal(j, j)) {
             A.tileGetForReading(j, j, LayoutConvert::None);
             B.tileGetForWriting(j, j, LayoutConvert::None);
-            tzcopy(A(j, j), B(j, j));
+            tile::tzcopy( A(j, j), B(j, j) );
             B.tileLayout(j, j, A.tileLayout(j, j));
             A.tileTick(j, j);
         }
@@ -208,7 +208,7 @@ void copy(internal::TargetType<Target::HostTask>,
                     {
                         A.tileGetForReading(i, j, LayoutConvert::None);
                         B.tileGetForWriting(i, j, LayoutConvert::None);
-                        gecopy(A(i, j), B(i, j));
+                        tile::gecopy( A(i, j), B(i, j) );
                         B.tileLayout(i, j, A.tileLayout(i, j));
                         A.tileTick(i, j);
                     }
@@ -224,7 +224,7 @@ void copy(internal::TargetType<Target::HostTask>,
                     {
                         A.tileGetForReading(i, j, LayoutConvert::None);
                         B.tileGetForWriting(i, j, LayoutConvert::None);
-                        gecopy(A(i, j), B(i, j));
+                        tile::gecopy( A(i, j), B(i, j) );
                         B.tileLayout(i, j, A.tileLayout(i, j));
                         A.tileTick(i, j);
                     }
@@ -252,8 +252,8 @@ void copy(internal::TargetType<Target::Devices>,
     slate_error_if(A.uplo() != B.uplo());
     bool lower = (B.uplo() == Uplo::Lower);
 
-    // Define index ranges for quadrants of matrix.
-    // Tiles in each quadrant are all the same size.
+    // Define index ranges for regions of matrix.
+    // Tiles in each region are all the same size.
     int64_t irange[6][2] = {
         // off-diagonal
         { 0,        B.mt()-1 },
@@ -281,23 +281,30 @@ void copy(internal::TargetType<Target::Devices>,
             shared( A, B ) priority( priority ) \
             firstprivate(device, irange, jrange, lower, queue_index)
         {
-            std::set<ij_tuple> A_tiles_set;
+            std::set<ij_tuple> A_tiles, B_diag_tiles;
             for (int64_t i = 0; i < B.mt(); ++i) {
                 for (int64_t j = 0; j < B.nt(); ++j) {
-                    if (B.tileIsLocal(i, j) &&
-                        device == B.tileDevice(i, j) &&
-                        ( (  lower && i >= j) ||
-                          (! lower && i <= j) ) )
+                    if (B.tileIsLocal(i, j) && device == B.tileDevice(i, j)
+                        && (   (  lower && i >= j)
+                            || (! lower && i <= j) ) )
                     {
-                        A_tiles_set.insert({i, j});
-                        // no need to convert layout
-                        B.tileAcquire(i, j, device, A(i, j).layout());
-                        // copy local and remote tiles to CPU;
-                        B.tileModified(i, j, device, true);
+                        A_tiles.insert( { i, j } );
+                        if (i == j) {
+                            B_diag_tiles.insert( { i, j } );
+                        }
+                        else {
+                            // no need to convert layout
+                            B.tileAcquire(  i, j, device, A(i, j).layout() );
+                            B.tileModified( i, j, device, true );
+                        }
                     }
                 }
             }
-            A.tileGetForReading(A_tiles_set, device, LayoutConvert::None);
+            // For B, diagonal tiles must be fetched for writing;
+            // off-diagonal tiles can be fetched for over-writing
+            // (tileAcquire above).
+            A.tileGetForReading( A_tiles, device, LayoutConvert::None );
+            B.tileGetForWriting( B_diag_tiles, device, LayoutConvert::None );
 
             // Usually the output matrix (B) provides all the batch arrays.
             // Here we are using A, because of the different types.
