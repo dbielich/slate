@@ -106,6 +106,8 @@ void gels_cholqr(
     const scalar_t one  = 1.0;
     const scalar_t zero = 0.0;
 
+    double elapse;
+
     // Get original, un-transposed matrix A0.
     slate::Matrix<scalar_t> A0;
     if (A.op() == Op::NoTrans)
@@ -127,7 +129,13 @@ void gels_cholqr(
         R = R.slice( 0, A0_N-1, 0, A0_N-1 );
         R.insertLocalTiles();
 
+        MPI_Barrier( MPI_COMM_WORLD );
+        elapse = -MPI_Wtime();
         cholqr( A0, R, opts );
+        MPI_Barrier( MPI_COMM_WORLD );
+        elapse += MPI_Wtime();
+
+        printf("CHOLQR = %3.4e\n",elapse);
 
         auto R_U = TriangularMatrix( Uplo::Upper, Diag::NonUnit, R );
 
@@ -145,13 +153,25 @@ void gels_cholqr(
             Y.insertLocalTiles();
 
             // Y = Q^H B
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse = -MPI_Wtime();
             gemm( one, QH, BX, zero, Y );
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse += MPI_Wtime();
+
+            printf("GEMM = %3.4e\n",elapse);
 
             // Copy back the result
             copy( Y, X );
 
             // X = R^{-1} Y
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse = -MPI_Wtime();
             trsm( Side::Left, one, R_U, X, opts );
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse += MPI_Wtime();
+
+            printf("TRSM = %3.4e\n",elapse);
         }
         else {
             // Solve A X = A0^H X = (QR)^H X = B.
@@ -167,10 +187,22 @@ void gels_cholqr(
 
             // Y = R^{-H} B
             auto RH = conj_transpose( R_U );
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse = -MPI_Wtime();
             trsm( Side::Left, one, RH, Y, opts );
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse += MPI_Wtime();
+
+            printf("TRSM = %3.4e\n",elapse);
 
             // X = Q Y, with Q stored in A0.
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse = -MPI_Wtime();
             gemm( one, A0, Y, zero, BX );
+            MPI_Barrier( MPI_COMM_WORLD );
+            elapse += MPI_Wtime();
+
+            printf("GEMM = %3.4e\n",elapse);
         }
     }
     else {
