@@ -135,7 +135,7 @@ void gels_cholqr(
         MPI_Barrier( MPI_COMM_WORLD );
         elapse += MPI_Wtime();
 
-        printf("CHOLQR = %3.4e\n",elapse);
+        if (A.mpiRank() == 0 ) printf("CHOLQR = %3.4e\n",elapse);
 
         auto R_U = TriangularMatrix( Uplo::Upper, Diag::NonUnit, R );
 
@@ -159,7 +159,7 @@ void gels_cholqr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("GEMM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("GEMM = %3.4e\n",elapse);
 
             // Copy back the result
             copy( Y, X );
@@ -171,7 +171,7 @@ void gels_cholqr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("TRSM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse);
         }
         else {
             // Solve A X = A0^H X = (QR)^H X = B.
@@ -193,7 +193,7 @@ void gels_cholqr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("TRSM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse);
 
             // X = Q Y, with Q stored in A0.
             MPI_Barrier( MPI_COMM_WORLD );
@@ -202,7 +202,7 @@ void gels_cholqr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("GEMM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("GEMM = %3.4e\n",elapse);
         }
     }
     else {

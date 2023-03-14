@@ -107,7 +107,7 @@ void gels_qr(
     const scalar_t zero = 0.0;
 
     double elapse;
-
+ 
     // Get original, un-transposed matrix A0.
     slate::Matrix<scalar_t> A0;
     if (A.op() == Op::NoTrans)
@@ -131,7 +131,7 @@ void gels_qr(
         MPI_Barrier( MPI_COMM_WORLD );
         elapse += MPI_Wtime();
 
-        printf("GEQRF = %3.4e\n",elapse);
+        if (A.mpiRank() == 0 ) printf("GEQRF = %3.4e\n",elapse);
 
         int64_t min_mn = std::min( m, n );
         auto R_ = A0.slice( 0, min_mn-1, 0, min_mn-1 );
@@ -149,7 +149,7 @@ void gels_qr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("UNMQR = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("UNMQR = %3.4e\n",elapse);
 
             // X is first n rows of BX.
             auto X = BX.slice( 0, n-1, 0, nrhs-1 );
@@ -161,7 +161,7 @@ void gels_qr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("TRSM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse); 
         }
         else {
             // Solve A X = A0^H X = (QR)^H X = B.
@@ -178,7 +178,7 @@ void gels_qr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("TRSM = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse);
 
             // X is all n rows of BX.
             // Zero out rows m:n-1 of BX.
@@ -194,7 +194,7 @@ void gels_qr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            printf("UNMQR = %3.4e\n",elapse);
+            if (A.mpiRank() == 0 ) printf("UNMQR = %3.4e\n",elapse);
         }
     }
     else {
