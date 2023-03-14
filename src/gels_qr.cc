@@ -107,7 +107,7 @@ void gels_qr(
     const scalar_t zero = 0.0;
 
     double elapse;
- 
+
     // Get original, un-transposed matrix A0.
     slate::Matrix<scalar_t> A0;
     if (A.op() == Op::NoTrans)
@@ -161,7 +161,7 @@ void gels_qr(
             MPI_Barrier( MPI_COMM_WORLD );
             elapse += MPI_Wtime();
 
-            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse); 
+            if (A.mpiRank() == 0 ) printf("TRSM = %3.4e\n",elapse);
         }
         else {
             // Solve A X = A0^H X = (QR)^H X = B.
